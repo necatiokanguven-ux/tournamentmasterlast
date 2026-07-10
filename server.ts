@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { Player, Table, TournamentSettings, ClockState, HistoryEvent } from "./src/types";
+import { createTrackingRouter } from "./src/tracking/trackingRoutes";
 
 const app = express();
 const PORT = 3000;
@@ -37,6 +38,7 @@ function loadDatabase() {
     breakFrequency: 6,
     type: "Re-entry",
     lateRegLevel: 7,
+    currency: "USD",
     isMultiDay: true,
     totalDays: 3,
     currentDay: 2,
@@ -261,6 +263,9 @@ app.post("/api/reset", (req, res) => {
   res.json({ success: true, data: db, message: "Database reset to factory defaults" });
 });
 
+// QR Live Tracking — local read-only tracking server
+app.use("/api/tracking", createTrackingRouter(PORT, () => db));
+
 // Setup Vite Dev Server / Prod Server Static
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
@@ -279,6 +284,7 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Express server listening on http://localhost:${PORT}`);
+    console.log(`QR Live Tracking (Phase 1): http://localhost:${PORT}/track`);
   });
 }
 

@@ -1,7 +1,7 @@
 {
   "settings": {
-    "id": "SMPC-2025-08",
-    "name": "Summer Poker Championship",
+    "id": "SMPC-2025-08-copy",
+    "name": "Summer Poker Championship (Copy)",
     "buyIn": 2000,
     "fee": 150,
     "startingStack": 30000,
@@ -147,13 +147,14 @@
         "ante": 10000,
         "duration": 20
       }
-    ]
+    ],
+    "currency": "USD"
   },
   "clock": {
-    "currentLevelIndex": 11,
-    "timeRemaining": 179,
-    "isRunning": true,
-    "elapsedTime": 23761,
+    "currentLevelIndex": 15,
+    "timeRemaining": 1200,
+    "isRunning": false,
+    "elapsedTime": 26439,
     "soundEnabled": true,
     "fullscreen": false
   },
@@ -778,14 +779,14 @@
       "country": "Brazil",
       "phone": "+1 555-0134",
       "notes": "Automated seed player 35",
-      "status": "Playing",
-      "chips": 97400,
-      "tableId": "table-1",
-      "seatIndex": 9,
+      "status": "Eliminated",
+      "chips": 0,
+      "tableId": null,
+      "seatIndex": null,
       "reentries": 0,
       "rebuys": 0,
       "addons": 1,
-      "eliminationOrder": null,
+      "eliminationOrder": 9,
       "registeredAt": "2026-07-10T11:48:27.625Z"
     },
     {
@@ -2587,6 +2588,24 @@
       "addons": 1,
       "eliminationOrder": 97,
       "registeredAt": "2026-07-10T11:48:27.625Z"
+    },
+    {
+      "firstName": "aiea",
+      "lastName": "iueaiea",
+      "nickname": "",
+      "country": "Turkey",
+      "phone": "",
+      "notes": "",
+      "id": "player-1783700720547",
+      "status": "Waiting",
+      "chips": 30000,
+      "tableId": null,
+      "seatIndex": null,
+      "reentries": 0,
+      "rebuys": 0,
+      "addons": 0,
+      "eliminationOrder": null,
+      "registeredAt": "2026-07-10T16:25:20.547Z"
     }
   ],
   "tables": [
@@ -2604,11 +2623,67 @@
         "player-20",
         "player-29",
         "player-34",
-        "player-35"
+        null
       ]
     }
   ],
   "history": [
+    {
+      "id": "h-1783716402588-qy2j",
+      "timestamp": "2026-07-10T20:46:42.588Z",
+      "type": "undo",
+      "description": "Level manually changed to Level 16"
+    },
+    {
+      "id": "h-1783712433654-77e6",
+      "timestamp": "2026-07-10T19:40:33.654Z",
+      "type": "undo",
+      "description": "Tournament clock paused"
+    },
+    {
+      "id": "h-1783712334096-vrv2",
+      "timestamp": "2026-07-10T19:38:54.096Z",
+      "type": "undo",
+      "description": "Break started: 15 min"
+    },
+    {
+      "id": "h-1783710353758-zdn0",
+      "timestamp": "2026-07-10T19:05:53.758Z",
+      "type": "undo",
+      "description": "Tournament settings and payout structure updated"
+    },
+    {
+      "id": "h-1783710152127-xgrx",
+      "timestamp": "2026-07-10T19:02:32.127Z",
+      "type": "undo",
+      "description": "Level 14 started: Blinds 2.000/4.000"
+    },
+    {
+      "id": "h-1783700720547-oydm",
+      "timestamp": "2026-07-10T16:25:20.547Z",
+      "type": "registration",
+      "description": "Registered: aiea iueaiea"
+    },
+    {
+      "id": "h-1783700613457-e4c3",
+      "timestamp": "2026-07-10T16:23:33.457Z",
+      "type": "bust",
+      "playerId": "player-35",
+      "playerName": "Player 35",
+      "description": "Player 35 eliminated"
+    },
+    {
+      "id": "h-1783700424078-kwl3",
+      "timestamp": "2026-07-10T16:20:24.078Z",
+      "type": "undo",
+      "description": "Tournament settings updated: Summer Poker Championship (Copy)"
+    },
+    {
+      "id": "h-1783700105019-3xnr",
+      "timestamp": "2026-07-10T16:15:05.019Z",
+      "type": "undo",
+      "description": "Level 13 started: Blinds 1.500/3.000"
+    },
     {
       "id": "h-1783698653150-yymx",
       "timestamp": "2026-07-10T15:50:53.150Z",
@@ -2910,121 +2985,63 @@
       "playerId": "player-19",
       "playerName": "Player 19",
       "description": "Player 19 eliminated"
-    },
-    {
-      "id": "h-1783698518121-81nu",
-      "timestamp": "2026-07-10T15:48:38.121Z",
-      "type": "bust",
-      "playerId": "player-26",
-      "playerName": "Player 26",
-      "description": "Player 26 eliminated"
-    },
-    {
-      "id": "h-1783698517586-ykrm",
-      "timestamp": "2026-07-10T15:48:37.586Z",
-      "type": "bust",
-      "playerId": "player-31",
-      "playerName": "Player 31",
-      "description": "Player 31 eliminated"
-    },
-    {
-      "id": "h-1783698513175-euhk",
-      "timestamp": "2026-07-10T15:48:33.175Z",
-      "type": "undo",
-      "description": "Undid action: \"Undid action: \"Payout updated\"\""
-    },
-    {
-      "id": "h2",
-      "timestamp": "2026-07-10T15:30:27.625Z",
-      "type": "undo",
-      "description": "Level 11 completed"
-    },
-    {
-      "id": "h3",
-      "timestamp": "2026-07-10T15:36:27.625Z",
-      "type": "undo",
-      "description": "Break finished"
-    },
-    {
-      "id": "h4",
-      "timestamp": "2026-07-10T15:38:27.625Z",
-      "type": "undo",
-      "description": "Registration closed"
-    },
-    {
-      "id": "h5",
-      "timestamp": "2026-07-10T15:41:27.625Z",
-      "type": "registration",
-      "description": "New player registered"
-    },
-    {
-      "id": "h6",
-      "timestamp": "2026-07-10T15:43:27.625Z",
-      "type": "reentry",
-      "description": "Mehmet re-entry"
-    },
-    {
-      "id": "h7",
-      "timestamp": "2026-07-10T15:45:27.625Z",
-      "type": "balance",
-      "description": "Table 3 balanced"
     }
   ],
   "payouts": [
     {
       "rank": 1,
       "percentage": 30,
-      "amount": 143400
+      "amount": 144000
     },
     {
       "rank": 2,
       "percentage": 19,
-      "amount": 90800
+      "amount": 91200
     },
     {
       "rank": 3,
       "percentage": 13.5,
-      "amount": 64550
+      "amount": 64800
     },
     {
       "rank": 4,
       "percentage": 9.5,
-      "amount": 45400
+      "amount": 45600
     },
     {
       "rank": 5,
       "percentage": 7,
-      "amount": 33450
+      "amount": 33600
     },
     {
       "rank": 6,
       "percentage": 5.5,
-      "amount": 26300
+      "amount": 26400
     },
     {
       "rank": 7,
       "percentage": 4.2,
-      "amount": 20100
+      "amount": 20150
     },
     {
       "rank": 8,
       "percentage": 3.2,
-      "amount": 15300
+      "amount": 15350
     },
     {
       "rank": 9,
       "percentage": 2.5,
-      "amount": 11950
+      "amount": 12000
     },
     {
       "rank": 10,
       "percentage": 2.1,
-      "amount": 10050
+      "amount": 10100
     },
     {
       "rank": 11,
       "percentage": 1.8,
-      "amount": 8600
+      "amount": 8650
     },
     {
       "rank": 12,

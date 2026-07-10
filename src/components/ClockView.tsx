@@ -5,9 +5,10 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useTournament } from "../useTournament";
-import { Play, Pause, RotateCcw, Volume2, VolumeX, Maximize2, Monitor, ArrowLeft, ArrowRight, ShieldAlert, CheckCircle2, SkipBack, SkipForward, Coffee, Check } from "lucide-react";
+import { Play, Pause, RotateCcw, Volume2, VolumeX, Maximize2, Monitor, ArrowLeft, ArrowRight, ShieldAlert, CheckCircle2, SkipBack, SkipForward, Coffee, Check, X } from "lucide-react";
 import { BlindLevel, PayoutStructure } from "../types";
 import { DESIGN_HEIGHT, DESIGN_WIDTH, calcDisplayScale } from "../displaySettings";
+import TrackingQrCode from "./TrackingQrCode";
 
 interface ClockViewProps {
   pendingFullscreen?: boolean;
@@ -117,6 +118,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
   const { clock, settings, players, history, payouts, tables } = state;
   const [payoutIndex, setPayoutIndex] = useState(0);
   const [showPayoutModal, setShowPayoutModal] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [payoutOffset, setPayoutOffset] = useState(0);
@@ -402,6 +404,19 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
   const totalPlayers = players.length;
   const playingPlayers = players.filter(p => p.status === "Playing" || p.status === "Waiting");
   const remainingPlayersCount = playingPlayers.length;
+
+  const hasSeatedActivePlayers = useMemo(
+    () =>
+      players.some(
+        (player) =>
+          (player.status === "Playing" ||
+            player.status === "Registered" ||
+            player.status === "Waiting" ||
+            player.status === "Re-entry") &&
+          player.tableId !== null,
+      ),
+    [players],
+  );
 
   const totalReentries = players.reduce((sum, p) => sum + (p.reentries || 0), 0);
   const totalRebuys = players.reduce((sum, p) => sum + (p.rebuys || 0), 0);
@@ -844,6 +859,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
           ))}
         </div>
       )}
+
       <style>{`
         @keyframes rapid-blink {
           0%, 100% { opacity: 1; filter: drop-shadow(0 0 10px rgba(239, 68, 68, 0.8)); }
@@ -915,7 +931,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
           </button>
           <button 
             id="reset-db-btn"
-            onClick={resetDatabase}
+            onClick={() => setShowResetConfirm(true)}
             className="p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-600 transition text-zinc-300 hover:text-zinc-100"
             title="Reset Tournament Data to Defaults"
             aria-label="Reset tournament data to defaults"
@@ -971,12 +987,12 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
             <div className="my-auto space-y-4">
               <div>
                 <p className="text-3xl md:text-4xl font-black tracking-tight text-zinc-100 font-sans">
-                  {averageBB} BB <span className="text-zinc-500 text-xl font-medium">/</span> <span className="text-amber-500">{averageStack.toLocaleString("en-US")}</span>
+                  {averageBB} BB <span className="text-zinc-500 text-xl font-medium">/</span> <span className="text-amber-500">{averageStack.toLocaleString("de-DE")}</span>
                 </p>
               </div>
               <div className="border-t border-zinc-800/60 pt-3">
                 <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-1">TOTAL CHIPS</p>
-                <p className="text-2xl font-black text-emerald-400 font-sans tracking-tight">{totalChipsInPlay.toLocaleString("en-US")}</p>
+                <p className="text-2xl font-black text-emerald-400 font-sans tracking-tight">{totalChipsInPlay.toLocaleString("de-DE")}</p>
               </div>
             </div>
           </div>
@@ -1291,21 +1307,31 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
             )}
           </div>
 
-          {/* NEXT BREAK PANEL */}
-          <div className="bg-zinc-900/40 rounded-2xl border border-zinc-800 p-3 shadow-lg flex flex-col shrink-0 relative overflow-hidden group hover:border-zinc-700 transition">
-            <div className="flex items-center gap-2 text-zinc-400 text-xs font-bold uppercase tracking-wider mb-2">
-              <span className="w-1.5 h-1.5 bg-amber-500 rounded-full"></span>
-              NEXT BREAK
-            </div>
-            <div>
-              <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-1.5">
-                IN {levelsUntilBreak()} LEVEL{levelsUntilBreak() !== 1 && "S"}
-              </p>
-              <div className="w-full bg-zinc-950 h-2.5 rounded-full overflow-hidden mb-2 border border-zinc-850">
-                <div className="bg-amber-500 h-full rounded-full transition-all duration-1000" style={{ width: `${nextBreakProgressPercent}%` }}></div>
+          <div className="flex gap-3 shrink-0 items-stretch">
+            {/* NEXT BREAK PANEL */}
+            <div className={`bg-zinc-900/40 rounded-2xl border border-zinc-800 p-3 shadow-lg flex flex-col shrink-0 relative overflow-hidden group hover:border-zinc-700 transition ${
+              hasSeatedActivePlayers ? "w-1/2 min-w-0" : "w-full"
+            }`}>
+              <div className="flex items-center gap-2 text-zinc-400 text-xs font-bold uppercase tracking-wider mb-2">
+                <span className="w-1.5 h-1.5 bg-amber-500 rounded-full"></span>
+                NEXT BREAK
               </div>
-              <p className="text-xl font-black font-mono tracking-tight text-zinc-100">{calculateTimeToNextBreak()}</p>
+              <div>
+                <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-1.5">
+                  IN {levelsUntilBreak()} LEVEL{levelsUntilBreak() !== 1 && "S"}
+                </p>
+                <div className="w-full bg-zinc-950 h-2.5 rounded-full overflow-hidden mb-2 border border-zinc-850">
+                  <div className="bg-amber-500 h-full rounded-full transition-all duration-1000" style={{ width: `${nextBreakProgressPercent}%` }}></div>
+                </div>
+                <p className="text-xl font-black font-mono tracking-tight text-zinc-100">{calculateTimeToNextBreak()}</p>
+              </div>
             </div>
+
+            {hasSeatedActivePlayers && (
+              <div className="w-1/2 min-w-0 flex items-center justify-center pointer-events-none">
+                <TrackingQrCode compact />
+              </div>
+            )}
           </div>
 
           {/* LIVE EVENT FEED VERTICAL CARD */}
@@ -1594,6 +1620,49 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
       )}
 
       {/* Payout Modal / Popover */}
+      {showResetConfirm && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative space-y-4">
+            <button
+              onClick={() => setShowResetConfirm(false)}
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white transition"
+              aria-label="Close reset confirmation"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 text-red-500">
+              <ShieldAlert className="w-6 h-6 shrink-0" />
+              <h3 className="text-lg font-black uppercase tracking-wider text-zinc-100">
+                Reset Tournament?
+              </h3>
+            </div>
+
+            <p className="text-sm text-zinc-300 leading-relaxed font-medium">
+              This will permanently reset all tournament data to defaults, including players, tables, blinds, payouts, and timer progress. This action cannot be undone.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                onClick={() => setShowResetConfirm(false)}
+                className="px-4 py-2 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 text-xs font-bold uppercase rounded-xl tracking-wider transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  resetDatabase();
+                  setShowResetConfirm(false);
+                }}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-black uppercase rounded-xl tracking-wider transition"
+              >
+                Yes, Reset
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showPayoutModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-zinc-900 rounded-2xl border border-zinc-800 p-6 max-w-xl w-full max-h-[80vh] flex flex-col">

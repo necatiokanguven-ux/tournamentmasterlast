@@ -44,6 +44,7 @@ class Store {
         type: "Re-entry",
         blindStructure: [],
         lateRegLevel: 7,
+        currency: "USD",
         isMultiDay: true,
         totalDays: 3,
         currentDay: 2

@@ -8,6 +8,7 @@ import { useTournament } from "../useTournament";
 import { Plus, Trash2, Save, Copy, RotateCcw, Sliders, PlayCircle, PlusCircle } from "lucide-react";
 import { BlindLevel, TournamentType, PayoutStructure } from "../types";
 import { tournamentStore } from "../store";
+import { getCurrencyConfig, TOURNAMENT_CURRENCIES } from "../currency";
 
 export default function SettingsView() {
   const { state, updateSettings, updateBlindStructure, updatePayouts, updateSettingsAndPayouts } = useTournament();
@@ -15,6 +16,7 @@ export default function SettingsView() {
 
   const [formState, setFormState] = useState({
     ...settings,
+    currency: settings.currency ?? "USD",
     lateRegLevel: settings.lateRegLevel ?? 7,
     isMultiDay: settings.isMultiDay ?? false,
     totalDays: settings.totalDays ?? 0,
@@ -78,6 +80,7 @@ export default function SettingsView() {
 
   const financials = getFinancials();
   const prize = financials.totalPrizePool;
+  const currencyConfig = getCurrencyConfig(formState.currency);
 
   useEffect(() => {
     if (state.payouts && state.payouts.length > 0) {
@@ -306,9 +309,23 @@ export default function SettingsView() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div>
-                  <label className="block text-[10px] text-zinc-400 font-bold uppercase tracking-wider mb-1.5">Buy-in ($)</label>
+                  <label className="block text-[10px] text-zinc-400 font-bold uppercase tracking-wider mb-1.5">Prize Currency</label>
+                  <select
+                    value={formState.currency ?? "USD"}
+                    onChange={(e) => handleChange("currency", e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-zinc-100 focus:outline-none focus:border-amber-500"
+                  >
+                    {TOURNAMENT_CURRENCIES.map((currency) => (
+                      <option key={currency.code} value={currency.code} className="bg-zinc-950 text-zinc-100">
+                        {currency.symbol} {currency.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] text-zinc-400 font-bold uppercase tracking-wider mb-1.5">Buy-in ({currencyConfig.symbol})</label>
                   <input 
                     type="number" 
                     value={formState.buyIn} 
@@ -317,7 +334,7 @@ export default function SettingsView() {
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] text-zinc-400 font-bold uppercase tracking-wider mb-1.5">Fee ($)</label>
+                  <label className="block text-[10px] text-zinc-400 font-bold uppercase tracking-wider mb-1.5">Fee ({currencyConfig.symbol})</label>
                   <input 
                     type="number" 
                     value={formState.fee} 

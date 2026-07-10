@@ -50,11 +50,21 @@ export type TournamentType =
   | 'Turbo' 
   | 'Hyper Turbo';
 
+export type TournamentCurrency =
+  | 'USD'
+  | 'EUR'
+  | 'GBP'
+  | 'TRY'
+  | 'CHF'
+  | 'CAD'
+  | 'AUD';
+
 export interface TournamentSettings {
   id: string;
   name: string;
   buyIn: number;
   fee: number;
+  currency?: TournamentCurrency;
   startingStack: number;
   bonusChips: number;
   addonChips: number;
