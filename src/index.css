@@ -1,0 +1,224 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist", ui-sans-serif, system-ui, sans-serif;
+}
+
+body, input, button, select, textarea {
+  font-family: "Geist", ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Custom CSS Scrollbar utilities */
+@keyframes rapid-blink {
+  0%, 100% { opacity: 1; filter: drop-shadow(0 0 15px rgba(239, 68, 68, 0.8)); }
+  50% { opacity: 0.15; filter: drop-shadow(0 0 2px rgba(239, 68, 68, 0.1)); }
+}
+
+.animate-rapid-blink {
+  animation: rapid-blink 0.5s infinite;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 99px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.6s ease-out;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.clock-fullscreen-viewport {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #09090b;
+}
+
+.clock-fullscreen-stage {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: center center;
+  background: #09090b;
+  color: #f4f4f5;
+  box-sizing: border-box;
+}
+
+.clock-fullscreen-viewport,
+.clock-fullscreen-stage {
+  overscroll-behavior: none;
+}
+
+/* Final table clock golden glow + slow falling money/chips */
+@keyframes final-table-object-fall {
+  0% {
+    top: -30%;
+    transform: translateX(0) rotate(0deg);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.92;
+  }
+  95% {
+    opacity: 0.75;
+  }
+  100% {
+    top: 105%;
+    transform: translateX(var(--fall-drift, 0px)) rotate(300deg);
+    opacity: 0;
+  }
+}
+
+@keyframes final-table-fall {
+  0% {
+    transform: translateY(-12%) translateX(0) rotate(0deg);
+    opacity: 0;
+  }
+  6% {
+    opacity: 0.85;
+  }
+  88% {
+    opacity: 0.65;
+  }
+  100% {
+    transform: translateY(108%) translateX(var(--fall-drift, 12px)) rotate(300deg);
+    opacity: 0;
+  }
+}
+
+@keyframes final-table-glow-pulse {
+  0%, 100% {
+    box-shadow:
+      inset 0 0 40px rgba(245, 158, 11, 0.12),
+      0 0 30px rgba(245, 158, 11, 0.18),
+      0 0 60px rgba(251, 191, 36, 0.08);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 55px rgba(245, 158, 11, 0.2),
+      0 0 45px rgba(245, 158, 11, 0.28),
+      0 0 80px rgba(251, 191, 36, 0.14);
+  }
+}
+
+@keyframes final-table-gold-shimmer {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.9; }
+}
+
+.final-table-clock-container {
+  animation: final-table-glow-pulse 4s ease-in-out infinite;
+}
+
+.final-table-gold-shimmer {
+  animation: final-table-gold-shimmer 5s ease-in-out infinite;
+}
+
+.final-table-fall-layer {
+  height: 100%;
+  min-height: 100%;
+}
+
+.final-table-title-spotlight {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -58%);
+  width: min(340px, 160%);
+  height: 180%;
+  pointer-events: none;
+  z-index: 1;
+  background: radial-gradient(
+    ellipse 75% 65% at 50% 42%,
+    rgba(255, 248, 220, 0.75) 0%,
+    rgba(251, 191, 36, 0.4) 28%,
+    rgba(245, 158, 11, 0.15) 52%,
+    transparent 72%
+  );
+  animation: final-table-spotlight-pulse 3.5s ease-in-out infinite;
+}
+
+@keyframes final-table-spotlight-pulse {
+  0%, 100% {
+    opacity: 0.85;
+    transform: translate(-50%, -58%) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: translate(-50%, -58%) scale(1.06);
+  }
+}
+
+.final-table-falling-object {
+  top: -30%;
+  opacity: 0;
+  animation-name: final-table-object-fall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-fill-mode: backwards;
+  will-change: top, transform, opacity;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.35));
+}
+
+.final-table-falling-object--once {
+  animation-iteration-count: 1;
+  animation-fill-mode: backwards;
+}
+
+.final-table-fall-particle {
+  animation-name: final-table-fall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform, opacity;
+}
+
+/* Print layout customizations */
+@media print {
+  body {
+    background-color: white !important;
+    color: black !important;
+  }
+  .print\:hidden {
+    display: none !important;
+  }
+  .print\:border-0 {
+    border: 0 !important;
+  }
+  .print\:p-0 {
+    padding: 0 !important;
+  }
+}

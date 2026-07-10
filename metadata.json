@@ -1,0 +1,6 @@
+{
+  "name": "Texas Hold'em Tournament Manager",
+  "description": "Professional live Texas Hold'em poker tournament manager and countdown clock, featuring real-time seating charts, blind structures, and player registrations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
