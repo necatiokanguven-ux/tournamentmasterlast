@@ -45,7 +45,8 @@ export default function LocalServerBanner() {
       <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0 text-amber-400" />
       <p>
         Local tournament server is not running on this PC. Start the Tournament Master local server
-        (port 3000) to save tournament data and enable QR Live Tracking.
+        (port 3000) to save tournament data and enable QR Live Tracking. License activation works in
+        the browser via <strong className="text-amber-100">License Key</strong>.
       </p>
     </div>
   );

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { localApi } from "../config/api";
 import type { LocalLicenseStatus } from "../license/config";
+import { fetchLicenseStatus } from "./licenseClient";
 
 export function useLicenseStatus() {
   const [status, setStatus] = useState<LocalLicenseStatus | null>(null);
@@ -9,19 +9,7 @@ export function useLicenseStatus() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetch(localApi("/api/license/status"));
-      if (!response.ok) {
-        setStatus({
-          licenseKey: null,
-          machineId: "",
-          machineName: null,
-          valid: false,
-          message: "Could not verify license status.",
-        });
-        return;
-      }
-
-      const data = (await response.json()) as LocalLicenseStatus;
+      const data = await fetchLicenseStatus();
       setStatus(data);
     } catch {
       setStatus({
@@ -29,7 +17,7 @@ export function useLicenseStatus() {
         machineId: "",
         machineName: null,
         valid: false,
-        message: "Could not reach local license service.",
+        message: "Could not verify license status.",
       });
     } finally {
       setLoading(false);

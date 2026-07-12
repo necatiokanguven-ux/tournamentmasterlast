@@ -27,6 +27,10 @@ export function isCloudHostedApp(): boolean {
     return true;
   }
 
+  if (hostname === "www.pokerclup.com" && pathname.startsWith("/app")) {
+    return true;
+  }
+
   if (hostname === "localhost" && port === "5174") {
     return true;
   }

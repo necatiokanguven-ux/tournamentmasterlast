@@ -75,7 +75,7 @@ export default function App() {
           <Lock className="w-4 h-4 mt-0.5 shrink-0 text-red-400" />
           <p>
             Tournament Master is locked until you activate a license key. Open{" "}
-            <strong className="text-red-100">License Key</strong> from the left menu.
+            <strong className="text-red-100">License Key</strong> from the left menu and paste your key from pokerclup.com.
             {licenseStatus?.message ? ` ${licenseStatus.message}` : ""}
           </p>
         </div>

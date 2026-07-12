@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { KeyRound, ShieldCheck, ShieldAlert, Loader2 } from "lucide-react";
-import { localApi } from "../config/api";
-import { LICENSE_API_BASE, type LicenseVerifyResponse, type LocalLicenseStatus } from "../license/config";
+import { isCloudHostedApp } from "../config/api";
+import type { LocalLicenseStatus } from "../license/config";
+import { activateLicenseKey, fetchLicenseStatus } from "../license/licenseClient";
 
 type LicenseSettingsProps = {
   variant?: "embedded" | "page";
@@ -13,18 +14,14 @@ export default function LicenseSettings({ variant = "embedded" }: LicenseSetting
   const [loading, setLoading] = useState(true);
   const [activating, setActivating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isCloudApp = isCloudHostedApp();
 
   const loadStatus = async () => {
     setLoading(true);
     setError(null);
 
     try {
-      const response = await fetch(localApi("/api/license/status"));
-      if (!response.ok) {
-        throw new Error("Could not load license status.");
-      }
-
-      const data = (await response.json()) as LocalLicenseStatus;
+      const data = await fetchLicenseStatus();
       setStatus(data);
       if (data.licenseKey) {
         setLicenseKey(data.licenseKey);
@@ -41,53 +38,15 @@ export default function LicenseSettings({ variant = "embedded" }: LicenseSetting
   }, []);
 
   const handleActivate = async () => {
-    const trimmedKey = licenseKey.trim();
-    if (!trimmedKey) {
-      setError("License key is required.");
-      return;
-    }
-
     setActivating(true);
     setError(null);
 
     try {
-      const machineResponse = await fetch(localApi("/api/license/machine"));
-      if (!machineResponse.ok) {
-        throw new Error("Could not read machine ID from local server.");
+      const data = await activateLicenseKey(licenseKey);
+      setStatus(data);
+      if (data.licenseKey) {
+        setLicenseKey(data.licenseKey);
       }
-
-      const machineData = (await machineResponse.json()) as {
-        machineId: string;
-        machineName: string | null;
-      };
-
-      const activateResponse = await fetch(`${LICENSE_API_BASE}/activate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          licenseKey: trimmedKey,
-          machineId: machineData.machineId,
-          machineName: machineData.machineName,
-        }),
-      });
-
-      const activateData = (await activateResponse.json()) as LicenseVerifyResponse;
-
-      if (!activateResponse.ok || !activateData.valid) {
-        throw new Error(activateData.message || "License activation failed.");
-      }
-
-      const saveResponse = await fetch(localApi("/api/license/save"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ licenseKey: trimmedKey }),
-      });
-
-      if (!saveResponse.ok) {
-        throw new Error("License activated remotely but could not save locally.");
-      }
-
-      await loadStatus();
       window.dispatchEvent(new Event("license-updated"));
     } catch (activateError) {
       setError(activateError instanceof Error ? activateError.message : "License activation failed.");
@@ -114,6 +73,13 @@ export default function LicenseSettings({ variant = "embedded" }: LicenseSetting
             License Activation
           </h2>
         </div>
+      )}
+
+      {isCloudApp && (
+        <p className="text-xs text-zinc-400 mb-4 leading-relaxed">
+          License activation works in the browser. Tournament data and QR tracking still require the
+          Tournament Master local server on port 3000.
+        </p>
       )}
 
       {loading ? (
@@ -151,7 +117,7 @@ export default function LicenseSettings({ variant = "embedded" }: LicenseSetting
             type="text"
             value={licenseKey}
             onChange={(event) => setLicenseKey(event.target.value)}
-            placeholder="FULL-XXXXX-XXXXX-XXXXX-XXXXX"
+            placeholder="TRIAL-XXXXX-XXXXX-XXXXX-XXXXX"
             className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm font-mono text-zinc-100 focus:border-amber-500 outline-none"
           />
 
