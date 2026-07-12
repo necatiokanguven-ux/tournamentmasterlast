@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import LocalServerBanner from "./components/LocalServerBanner";
 import ClockView from "./components/ClockView";
 import SettingsView from "./components/SettingsView";
@@ -13,6 +13,8 @@ import ReportsView from "./components/ReportsView";
 import DisplayView from "./components/DisplayView";
 import LicenseView from "./components/LicenseView";
 import { useLicenseStatus } from "./license/useLicenseStatus";
+import { getLicenseNavStatus } from "./license/licenseDisplay";
+import { tournamentStore } from "./store";
 import { Timer, Settings, Users, Grid, FileText, ChevronLeft, ChevronRight, Monitor, KeyRound, Lock } from "lucide-react";
 
 type AppTab = "clock" | "license" | "settings" | "players" | "tables" | "reports" | "display";
@@ -22,6 +24,21 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("clock");
   const [isNavCollapsed, setIsNavCollapsed] = useState(false);
   const [pendingClockFullscreen, setPendingClockFullscreen] = useState(false);
+  const [dataReady, setDataReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void tournamentStore.load().finally(() => {
+      if (!cancelled) {
+        setDataReady(true);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!licenseLoading && !isLicensed) {
@@ -47,6 +64,8 @@ export default function App() {
 
     setActiveTab(tab);
   };
+
+  const licenseNavStatus = getLicenseNavStatus(licenseLoading, isLicensed, licenseStatus);
 
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden font-sans flex-col">
@@ -101,26 +120,68 @@ export default function App() {
               const Icon = nav.icon;
               const active = activeTab === nav.id;
               const locked = !isLicensed && nav.id !== "license";
+              const isLicenseNav = nav.id === "license";
+              const statusToneClass =
+                licenseNavStatus.tone === "active"
+                  ? "text-emerald-400"
+                  : licenseNavStatus.tone === "inactive"
+                    ? "text-red-400"
+                    : "text-zinc-500";
+
               return (
                 <button
                   key={nav.id}
                   onClick={() => handleTabSelect(nav.id as AppTab)}
                   disabled={licenseLoading}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${
+                  className={`w-full rounded-xl text-xs font-black uppercase tracking-wider transition-all ${
+                    isLicenseNav ? "px-3 py-2" : "flex items-center gap-3 px-3 py-2.5"
+                  } ${
                     active
                       ? "bg-gradient-to-r from-zinc-800 to-zinc-900/40 border border-zinc-800 text-zinc-100 font-extrabold shadow-sm"
                       : locked
                         ? "text-zinc-600 cursor-not-allowed opacity-60"
                         : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/40"
                   }`}
-                  title={isNavCollapsed ? nav.label : locked ? "Activate a license key first" : nav.label}
+                  title={
+                    isNavCollapsed
+                      ? `${nav.label} — ${licenseNavStatus.primary}${licenseNavStatus.secondary ? ` (${licenseNavStatus.secondary})` : ""}`
+                      : locked
+                        ? "Activate a license key first"
+                        : nav.label
+                  }
                 >
-                  <Icon className={`w-4 h-4 ${nav.color}`} />
-                  {!isNavCollapsed && (
-                    <span className="flex items-center gap-2">
-                      {nav.label}
-                      {locked && <Lock className="w-3 h-3 text-zinc-600" />}
-                    </span>
+                  {isLicenseNav ? (
+                    <div className={`flex ${isNavCollapsed ? "flex-col items-center gap-1" : "items-start gap-3"} w-full`}>
+                      <Icon className={`w-4 h-4 shrink-0 ${nav.color}`} />
+                      {!isNavCollapsed ? (
+                        <div className="min-w-0 flex-1 text-left normal-case tracking-normal">
+                          <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-inherit">
+                            <span>{nav.label}</span>
+                            {locked && <Lock className="w-3 h-3 text-zinc-600" />}
+                          </div>
+                          <p className={`mt-1 text-[10px] font-bold leading-tight ${statusToneClass}`}>
+                            {licenseNavStatus.primary}
+                            {licenseNavStatus.secondary ? (
+                              <span className="text-zinc-500 font-semibold normal-case"> · {licenseNavStatus.secondary}</span>
+                            ) : null}
+                          </p>
+                        </div>
+                      ) : (
+                        <span className={`text-[8px] font-bold leading-none ${statusToneClass}`}>
+                          {licenseNavStatus.tone === "active" ? "ON" : licenseNavStatus.tone === "inactive" ? "OFF" : "…"}
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      <Icon className={`w-4 h-4 ${nav.color}`} />
+                      {!isNavCollapsed && (
+                        <span className="flex items-center gap-2">
+                          {nav.label}
+                          {locked && <Lock className="w-3 h-3 text-zinc-600" />}
+                        </span>
+                      )}
+                    </>
                   )}
                 </button>
               );
@@ -143,18 +204,23 @@ export default function App() {
         }`}
         id="main-content-canvas"
       >
-        {activeTab === "clock" && isLicensed && (
+        {!dataReady && (
+          <div className="flex-1 flex items-center justify-center text-zinc-400 text-sm font-bold uppercase tracking-wider">
+            Loading tournament data...
+          </div>
+        )}
+        {dataReady && activeTab === "clock" && isLicensed && (
           <ClockView
             pendingFullscreen={pendingClockFullscreen}
             onFullscreenHandled={() => setPendingClockFullscreen(false)}
           />
         )}
-        {activeTab === "display" && isLicensed && <DisplayView onLaunchClockFullscreen={handleLaunchClockFullscreen} />}
-        {activeTab === "license" && <LicenseView />}
-        {activeTab === "settings" && isLicensed && <SettingsView />}
-        {activeTab === "players" && isLicensed && <PlayersView />}
-        {activeTab === "tables" && isLicensed && <TablesView />}
-        {activeTab === "reports" && isLicensed && <ReportsView />}
+        {dataReady && activeTab === "display" && isLicensed && <DisplayView onLaunchClockFullscreen={handleLaunchClockFullscreen} />}
+        {dataReady && activeTab === "license" && <LicenseView />}
+        {dataReady && activeTab === "settings" && isLicensed && <SettingsView />}
+        {dataReady && activeTab === "players" && isLicensed && <PlayersView />}
+        {dataReady && activeTab === "tables" && isLicensed && <TablesView />}
+        {dataReady && activeTab === "reports" && isLicensed && <ReportsView />}
         {!licenseLoading && !isLicensed && activeTab !== "license" && <LicenseView />}
       </main>
 

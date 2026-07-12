@@ -14,11 +14,36 @@ const DB_FILE = path.join(process.cwd(), "db.json");
 app.use(express.json());
 applyLocalServerCors(app);
 
+function isSeedWaitingPlayer(player: Player): boolean {
+  return player.id.startsWith("player-wait-")
+    || (player.firstName === "Waiting" && /^Player \d+$/.test(player.lastName));
+}
+
+function sanitizeDatabase(db: any) {
+  if (!Array.isArray(db.players)) return db;
+
+  const players = (db.players as Player[]).filter(player => !isSeedWaitingPlayer(player));
+  const playerIds = new Set(players.map(player => player.id));
+  const tables = Array.isArray(db.tables)
+    ? (db.tables as Table[]).map(table => ({
+        ...table,
+        seats: table.seats.map(seatId => (seatId && playerIds.has(seatId) ? seatId : null)),
+      }))
+    : db.tables;
+
+  return { ...db, players, tables };
+}
+
 // Helper to load database with rich defaults matching screenshot_100.png exactly
 function loadDatabase() {
   if (fs.existsSync(DB_FILE)) {
     try {
-      return JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+      const raw = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+      const sanitized = sanitizeDatabase(raw);
+      if (Array.isArray(raw.players) && Array.isArray(sanitized.players) && sanitized.players.length !== raw.players.length) {
+        saveDatabase(sanitized);
+      }
+      return sanitized;
     } catch (e) {
       console.error("Error reading database, using defaults", e);
     }
@@ -145,28 +170,6 @@ function loadDatabase() {
       addons: Math.random() > 0.5 ? 1 : 0,
       eliminationOrder: isPlaying ? null : (i - 40),
       registeredAt: new Date(Date.now() - 3600000 * 4).toISOString()
-    });
-  }
-
-  // Adding some waiting list players too!
-  for (let i = 0; i < 5; i++) {
-    players.push({
-      id: `player-wait-${i}`,
-      firstName: `Waiting`,
-      lastName: `Player ${i + 1}`,
-      nickname: `WaitPoker_${i + 1}`,
-      country: "Turkey",
-      phone: `+1 555-09${i}`,
-      notes: "Waiting on registration",
-      status: "Waiting",
-      chips: 35000,
-      tableId: null,
-      seatIndex: null,
-      reentries: 0,
-      rebuys: 0,
-      addons: 0,
-      eliminationOrder: null,
-      registeredAt: new Date().toISOString()
     });
   }
 

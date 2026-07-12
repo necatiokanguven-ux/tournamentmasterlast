@@ -10,9 +10,6 @@ export function useTournament() {
   const [state, setState] = useState<AppState>(tournamentStore.getState());
 
   useEffect(() => {
-    // Initial load
-    tournamentStore.load();
-    
     // Subscribe to store updates
     const unsubscribe = tournamentStore.subscribe((newState) => {
       setState({
@@ -67,6 +64,9 @@ export function useTournament() {
     
     // Utility / Logs
     undoLastHistory: () => tournamentStore.undoLastHistory(),
+    undoTableAction: () => tournamentStore.undoTableAction(),
+    getTableUndoCount: () => tournamentStore.getTableUndoStackSize(),
+    getWaitingListPlayers: () => tournamentStore.getWaitingListPlayers(),
     resetDatabase: () => tournamentStore.reset()
   };
 }

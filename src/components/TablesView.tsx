@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { useTournament } from "../useTournament";
-import { Plus, Trash2, ShieldAlert, Users, Grid, RefreshCw, X, UserCheck, Skull } from "lucide-react";
+import { Plus, Trash2, ShieldAlert, Users, Grid, RefreshCw, X, UserCheck, Undo2 } from "lucide-react";
 import { Table } from "../types";
 
 export default function TablesView() {
@@ -18,11 +18,15 @@ export default function TablesView() {
     unseatPlayer,
     swapPlayers,
     balanceTables,
-    bustPlayer,
-    deletePlayer
+    deletePlayer,
+    undoTableAction,
+    getTableUndoCount,
+    getWaitingListPlayers,
   } = useTournament();
 
   const { players, tables } = state;
+  const undoCount = getTableUndoCount();
+  const waitingPlayers = useMemo(() => getWaitingListPlayers(), [players, tables]);
 
   const [selectedTableId, setSelectedTableId] = useState<string | null>(tables[0]?.id || null);
 
@@ -38,8 +42,6 @@ export default function TablesView() {
     title: "",
     message: ""
   });
-
-  const waitingPlayers = players.filter(p => p.status === "Waiting" || p.status === "Registered");
 
   const getPlayer = (id: string | null) => {
     if (!id) return null;
@@ -178,8 +180,8 @@ export default function TablesView() {
     setModal(prev => ({ ...prev, isOpen: false }));
   };
 
-  const handleBustPlayer = (playerId: string) => {
-    bustPlayer(playerId);
+  const handleRemovePlayer = (playerId: string) => {
+    deletePlayer(playerId);
   };
 
   const handleDeleteWaitingPlayer = (playerId: string) => {
@@ -187,7 +189,7 @@ export default function TablesView() {
   };
 
   const renderTableCard = (table: Table) => {
-    const occupants = table.seats.slice(0, 9).filter(s => s !== null).length;
+    const occupants = table.seats.filter(s => s !== null).length;
 
     return (
       <div
@@ -210,7 +212,7 @@ export default function TablesView() {
         <div className="border-b border-zinc-800/80 mb-0.5" />
 
         <div className="space-y-px">
-          {Array.from({ length: 9 }).map((_, seatIdx) => {
+          {Array.from({ length: table.seats.length }).map((_, seatIdx) => {
             const playerId = table.seats[seatIdx];
             const player = getPlayer(playerId);
 
@@ -259,12 +261,12 @@ export default function TablesView() {
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleBustPlayer(player.id);
+                      handleRemovePlayer(player.id);
                     }}
                     className="w-5 h-5 rounded bg-red-950/40 border border-red-900/50 hover:border-red-500 hover:bg-red-500/20 text-red-400 hover:text-red-300 transition flex items-center justify-center shrink-0"
-                    title="Bust Player"
+                    title="Remove player from tournament"
                   >
-                    <Skull className="w-2.5 h-2.5" />
+                    <Trash2 className="w-2.5 h-2.5" />
                   </button>
                 )}
               </div>
@@ -285,6 +287,21 @@ export default function TablesView() {
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={undoTableAction}
+              disabled={undoCount === 0}
+              className="px-2.5 py-1 bg-zinc-900 border border-zinc-800 hover:border-sky-500/50 hover:bg-sky-500/10 rounded-lg text-[10px] font-bold uppercase tracking-wider transition flex items-center gap-1 text-sky-400 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-zinc-800 disabled:hover:bg-zinc-900"
+              title={undoCount > 0 ? `Undo last action (${undoCount} available)` : "No actions to undo"}
+            >
+              <Undo2 className="w-3.5 h-3.5" />
+              Undo
+              {undoCount > 0 && (
+                <span className="min-w-[16px] h-4 px-1 rounded-full bg-sky-500/20 border border-sky-500/30 text-[9px] font-black leading-none flex items-center justify-center">
+                  {undoCount}
+                </span>
+              )}
+            </button>
             <button
               onClick={handleRandomAutoSeat}
               className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-black uppercase tracking-wider transition flex items-center gap-1"

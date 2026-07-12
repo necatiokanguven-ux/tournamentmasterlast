@@ -15,12 +15,27 @@ export interface AppState {
   payouts: PayoutStructure[];
 }
 
+interface TableUndoSnapshot {
+  players: Player[];
+  tables: Table[];
+  payouts: PayoutStructure[];
+  history: HistoryEvent[];
+}
+
+const MAX_TABLE_UNDO_STACK = 50;
+
 // Custom simple event emitter for React components to subscribe to store updates
 type Listener = (state: AppState) => void;
 class Store {
   private state!: AppState;
   private listeners: Set<Listener> = new Set();
   private timerId: any = null;
+  private tableUndoStack: TableUndoSnapshot[] = [];
+  private isApplyingTableUndo = false;
+  private hasLoadedFromServer = false;
+  private sessionDirty = false;
+  private saveChain: Promise<void> = Promise.resolve();
+  private debouncedPersistTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.state = this.getInitialState();
@@ -80,17 +95,96 @@ class Store {
     this.listeners.forEach(l => l(this.state));
   }
 
+  private cloneAppState(state: AppState = this.state): AppState {
+    return {
+      settings: {
+        ...state.settings,
+        blindStructure: state.settings.blindStructure.map(level => ({ ...level })),
+      },
+      clock: { ...state.clock },
+      players: state.players.map(player => ({ ...player })),
+      tables: state.tables.map(table => ({ ...table, seats: [...table.seats] })),
+      history: state.history.map(event => ({ ...event })),
+      payouts: state.payouts.map(payout => ({ ...payout })),
+    };
+  }
+
+  private enqueuePersist(snapshot: AppState = this.cloneAppState()) {
+    this.saveChain = this.saveChain
+      .then(() => this.persistSnapshot(snapshot))
+      .catch(error => {
+        console.error("Failed to save data to backend", error);
+      });
+  }
+
+  private async persistSnapshot(snapshot: AppState) {
+    await fetch(localApi("/api/save"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(snapshot),
+    });
+  }
+
+  private scheduleDebouncedPersist() {
+    if (this.debouncedPersistTimer) {
+      clearTimeout(this.debouncedPersistTimer);
+    }
+
+    this.debouncedPersistTimer = setTimeout(() => {
+      this.debouncedPersistTimer = null;
+      this.enqueuePersist();
+    }, 1500);
+  }
+
+  public flushPendingSaves(): Promise<void> {
+    return this.saveChain;
+  }
+
   private emit() {
+    this.sessionDirty = true;
     this.notify();
-    this.saveToBackend();
+    this.enqueuePersist();
+  }
+
+  private emitDebounced() {
+    this.sessionDirty = true;
+    this.notify();
+    this.scheduleDebouncedPersist();
+  }
+
+  private isSeedWaitingPlayer(player: Player): boolean {
+    return player.id.startsWith('player-wait-')
+      || (player.firstName === 'Waiting' && /^Player \d+$/.test(player.lastName));
+  }
+
+  private sanitizeLoadedPlayers(players: Player[], tables: Table[]): { players: Player[]; tables: Table[] } {
+    const cleanedPlayers = players.filter(player => !this.isSeedWaitingPlayer(player));
+    const playerIds = new Set(cleanedPlayers.map(player => player.id));
+
+    const cleanedTables = tables.map(table => ({
+      ...table,
+      seats: table.seats.map(seatId => (seatId && playerIds.has(seatId) ? seatId : null)),
+    }));
+
+    return { players: cleanedPlayers, tables: cleanedTables };
   }
 
   // Load from backend
-  public async load() {
+  public async load(options?: { force?: boolean }) {
+    if (this.hasLoadedFromServer && !options?.force) {
+      return;
+    }
+
     try {
+      await this.flushPendingSaves();
       const res = await fetch(localApi("/api/data"));
       const data = await res.json();
       if (data && data.players) {
+        if (this.sessionDirty && !options?.force) {
+          this.hasLoadedFromServer = true;
+          return;
+        }
+
         const settings = {
           ...data.settings,
           lateRegLevel: data.settings.lateRegLevel ?? 7,
@@ -98,18 +192,21 @@ class Store {
           totalDays: data.settings.totalDays ?? 0,
           currentDay: data.settings.currentDay ?? 1
         };
+        const { players, tables } = this.sanitizeLoadedPlayers(data.players, data.tables || []);
         this.state = {
           settings,
           clock: {
             ...data.clock,
             soundEnabled: data.clock?.soundEnabled ?? true,
           },
-          players: data.players,
-          tables: data.tables,
+          players,
+          tables,
           history: data.history || [],
-          payouts: data.payouts && data.payouts.length > 0 ? data.payouts : this.calculatePayouts(settings, data.players)
+          payouts: data.payouts && data.payouts.length > 0 ? data.payouts : this.calculatePayouts(settings, players)
         };
         this.reconcileTableSeats();
+        this.clearTableUndoStack();
+        this.hasLoadedFromServer = true;
         // Setup clock sync
         if (this.state.clock.isRunning) {
           this.startTimerInternal();
@@ -118,19 +215,6 @@ class Store {
       }
     } catch (e) {
       console.error("Failed to load tournament data from backend", e);
-    }
-  }
-
-  // Save to backend
-  private async saveToBackend() {
-    try {
-      await fetch(localApi("/api/save"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(this.state)
-      });
-    } catch (e) {
-      console.error("Failed to save data to backend", e);
     }
   }
 
@@ -161,6 +245,8 @@ class Store {
         };
         this.reconcileTableSeats();
         this.stopTimerInternal();
+        this.clearTableUndoStack();
+        this.hasLoadedFromServer = true;
         this.emit();
       }
     } catch (e) {
@@ -248,6 +334,7 @@ class Store {
   private tick() {
     let { timeRemaining, currentLevelIndex, elapsedTime } = this.state.clock;
     const structure = this.state.settings.blindStructure;
+    let levelChanged = false;
     
     if (timeRemaining > 0) {
       timeRemaining--;
@@ -266,6 +353,7 @@ class Store {
         }
       }
     } else {
+      levelChanged = true;
       // Level complete! Go to next level
       if (currentLevelIndex < structure.length - 1) {
         currentLevelIndex++;
@@ -285,7 +373,12 @@ class Store {
         this.addLog('undo', 'Tournament structure completed');
       }
     }
-    this.emit();
+
+    if (levelChanged) {
+      this.emit();
+    } else {
+      this.emitDebounced();
+    }
   }
 
   public adjustTime(seconds: number) {
@@ -315,11 +408,10 @@ class Store {
 
   // --- Players Management ---
   public registerPlayer(playerData: Omit<Player, 'id' | 'status' | 'chips' | 'tableId' | 'seatIndex' | 'reentries' | 'rebuys' | 'addons' | 'eliminationOrder' | 'registeredAt'>) {
-    const newId = `player-${Date.now()}`;
     const newPlayer: Player = {
       ...playerData,
-      id: newId,
-      status: 'Waiting', // Appears in waiting list first
+      id: `player-${Date.now()}`,
+      status: 'Registered',
       chips: this.state.settings.startingStack,
       tableId: null,
       seatIndex: null,
@@ -329,13 +421,31 @@ class Store {
       eliminationOrder: null,
       registeredAt: new Date().toISOString()
     };
-    
-    this.state.players.push(newPlayer);
+
+    this.state = {
+      ...this.state,
+      players: [...this.state.players, newPlayer],
+      payouts: this.state.payouts && this.state.payouts.length > 0
+        ? this.updatePayoutAmounts(this.state.settings, [...this.state.players, newPlayer], this.state.payouts)
+        : this.calculatePayouts(this.state.settings, [...this.state.players, newPlayer]),
+    };
+
     this.addLog('registration', `Registered: ${playerData.firstName} ${playerData.lastName}`);
-    this.state.payouts = this.state.payouts && this.state.payouts.length > 0
-      ? this.updatePayoutAmounts(this.state.settings, this.state.players, this.state.payouts)
-      : this.calculatePayouts(this.state.settings, this.state.players);
     this.emit();
+  }
+
+  public getWaitingListPlayers(): Player[] {
+    return this.state.players.filter((player) => {
+      if (
+        player.status !== 'Waiting'
+        && player.status !== 'Registered'
+        && player.status !== 'Re-entry'
+      ) {
+        return false;
+      }
+
+      return !this.isPlayerSeated(player.id) && !player.tableId;
+    });
   }
 
   public updatePlayer(id: string, updates: Partial<Player>) {
@@ -352,23 +462,29 @@ class Store {
     const player = this.state.players.find(p => p.id === id);
     if (!player) return;
 
-    const updatedPlayers = this.state.players.filter(p => p.id !== id);
-    const updatedTables = this.state.tables.map(table => ({
-      ...table,
-      seats: table.seats.map(seatId => (seatId === id ? null : seatId)),
-    }));
+    this.pushTableUndoSnapshot();
+
+    const playerName = `${player.firstName} ${player.lastName}`;
 
     this.state = {
       ...this.state,
-      players: updatedPlayers,
-      tables: updatedTables,
+      players: this.state.players.filter(p => p.id !== id),
+      tables: this.state.tables.map(table => ({
+        ...table,
+        seats: table.seats.map(seatId => (seatId === id ? null : seatId)),
+      })),
     };
 
-    this.addLog('undo', `Deleted player: ${player.firstName} ${player.lastName}`);
+    this.syncSeatsAfterPlayerChange();
+    this.addLog('bust', `${playerName} eliminated`, id, playerName);
     this.state.payouts = this.state.payouts && this.state.payouts.length > 0
       ? this.updatePayoutAmounts(this.state.settings, this.state.players, this.state.payouts)
       : this.calculatePayouts(this.state.settings, this.state.players);
-    this.emit();
+
+    const snapshot = this.cloneAppState();
+    this.sessionDirty = true;
+    this.notify();
+    this.enqueuePersist(snapshot);
   }
 
   // Player Actions: Bust, Rebuy, Re-entry, Add-on, Disqualify
@@ -377,7 +493,12 @@ class Store {
     if (!player || player.status === 'Eliminated') return;
 
     const isSeated = this.isPlayerSeated(id);
-    const canBust = player.status === 'Playing' || player.status === 'Waiting' || isSeated;
+    const canBust =
+      player.status === 'Playing'
+      || player.status === 'Waiting'
+      || player.status === 'Registered'
+      || player.status === 'Re-entry'
+      || isSeated;
     if (!canBust) return;
 
     const playingPlayers = this.state.players.filter(p => p.status === 'Playing' || p.status === 'Waiting');
@@ -407,6 +528,7 @@ class Store {
       tables: updatedTables,
     };
 
+    this.syncSeatsAfterPlayerChange();
     this.addLog('bust', `${player.firstName} ${player.lastName} eliminated`, id);
     this.emit();
   }
@@ -472,7 +594,51 @@ class Store {
       tables: updatedTables,
     };
 
-    this.addLog('disqualify', `DISQUALIFIED: ${player.firstName} ${player.lastName}`, id);
+    this.syncSeatsAfterPlayerChange();
+    this.addLog('bust', `${player.firstName} ${player.lastName} eliminated`, id);
+    this.emit();
+  }
+
+  // --- Table undo stack ---
+  private createTableUndoSnapshot(): TableUndoSnapshot {
+    return {
+      players: this.state.players.map(player => ({ ...player })),
+      tables: this.state.tables.map(table => ({ ...table, seats: [...table.seats] })),
+      payouts: this.state.payouts.map(payout => ({ ...payout })),
+      history: this.state.history.map(event => ({ ...event })),
+    };
+  }
+
+  private pushTableUndoSnapshot() {
+    if (this.isApplyingTableUndo) return;
+
+    this.tableUndoStack.push(this.createTableUndoSnapshot());
+    if (this.tableUndoStack.length > MAX_TABLE_UNDO_STACK) {
+      this.tableUndoStack.shift();
+    }
+  }
+
+  private clearTableUndoStack() {
+    this.tableUndoStack = [];
+  }
+
+  public getTableUndoStackSize(): number {
+    return this.tableUndoStack.length;
+  }
+
+  public undoTableAction() {
+    const snapshot = this.tableUndoStack.pop();
+    if (!snapshot) return;
+
+    this.isApplyingTableUndo = true;
+    this.state = {
+      ...this.state,
+      players: snapshot.players.map(player => ({ ...player })),
+      tables: snapshot.tables.map(table => ({ ...table, seats: [...table.seats] })),
+      payouts: snapshot.payouts.map(payout => ({ ...payout })),
+      history: snapshot.history.map(event => ({ ...event })),
+    };
+    this.isApplyingTableUndo = false;
     this.emit();
   }
 
@@ -481,6 +647,9 @@ class Store {
     const nextNum = this.state.tables.length > 0 
       ? Math.max(...this.state.tables.map(t => t.number)) + 1 
       : 1;
+
+    this.pushTableUndoSnapshot();
+
     const newTable: Table = {
       id: `table-${Date.now()}`,
       number: nextNum,
@@ -495,6 +664,8 @@ class Store {
   public deleteTable(tableId: string) {
     const table = this.state.tables.find(t => t.id === tableId);
     if (table) {
+      this.pushTableUndoSnapshot();
+
       // Unseat all players at this table back to waiting list
       table.seats.forEach(pId => {
         if (pId) {
@@ -515,6 +686,8 @@ class Store {
   public closeEmptyTables() {
     const emptyTables = this.state.tables.filter(t => t.seats.every(s => s === null));
     if (emptyTables.length > 0) {
+      this.pushTableUndoSnapshot();
+
       emptyTables.forEach(et => {
         this.state.tables = this.state.tables.filter(t => t.id !== et.id);
         this.addLog('balance', `Closed Empty Table ${et.number}`);
@@ -529,6 +702,8 @@ class Store {
     const table = this.state.tables.find(t => t.id === tableId);
 
     if (!player || !table || seatIndex < 0 || seatIndex >= 10) return;
+
+    this.pushTableUndoSnapshot();
 
     const existingPlayerId = table.seats[seatIndex];
 
@@ -582,6 +757,8 @@ class Store {
     const player = this.state.players.find(p => p.id === playerId);
     if (!player || !player.tableId || player.seatIndex === null) return;
 
+    this.pushTableUndoSnapshot();
+
     const updatedTables = this.state.tables.map(table => ({
       ...table,
       seats: table.seats.map(seatId => (seatId === playerId ? null : seatId)),
@@ -599,21 +776,32 @@ class Store {
       tables: updatedTables,
     };
 
+    this.syncSeatsAfterPlayerChange();
     this.addLog('move', `Moved ${player.firstName} ${player.lastName} to Waiting List`);
     this.emit();
   }
 
-  private isPlayerSeated(playerId: string): boolean {
+  public isPlayerSeated(playerId: string): boolean {
     return this.state.tables.some(table => table.seats.includes(playerId));
+  }
+
+  private syncSeatsAfterPlayerChange() {
+    this.reconcileTableSeats();
   }
 
   private reconcileTableSeats() {
     let changed = false;
 
+    const playerIds = new Set(this.state.players.map(player => player.id));
+
     const updatedTables = this.state.tables.map(table => ({
       ...table,
       seats: table.seats.map(seatId => {
         if (!seatId) return null;
+        if (!playerIds.has(seatId)) {
+          changed = true;
+          return null;
+        }
         const seatedPlayer = this.state.players.find(p => p.id === seatId);
         if (!seatedPlayer || seatedPlayer.status === 'Eliminated') {
           changed = true;
@@ -687,6 +875,8 @@ class Store {
       const t2 = this.state.tables.find(t => t.id === p2.tableId);
       
       if (t1 && t2) {
+        this.pushTableUndoSnapshot();
+
         const s1 = p1.seatIndex;
         const s2 = p2.seatIndex;
         
@@ -714,8 +904,13 @@ class Store {
 
   // Auto Seating
   public autoSeatAll() {
-    const waitingPlayers = this.state.players.filter(p => p.status === 'Waiting');
+    const waitingPlayers = this.getWaitingListPlayers();
     if (waitingPlayers.length === 0) return;
+
+    const hasEmptySeat = this.state.tables.some(table => table.seats.includes(null));
+    if (!hasEmptySeat) return;
+
+    this.pushTableUndoSnapshot();
 
     let seatedCount = 0;
     for (const player of waitingPlayers) {
@@ -739,6 +934,8 @@ class Store {
     if (seatedCount > 0) {
       this.addLog('balance', `Auto-seated ${seatedCount} players`);
       this.emit();
+    } else {
+      this.tableUndoStack.pop();
     }
   }
 
@@ -778,6 +975,8 @@ class Store {
         const destSeatIdx = destTable.seats.indexOf(null);
 
         if (destSeatIdx !== -1) {
+          this.pushTableUndoSnapshot();
+
           // Perform move
           sourceTable.seats[sourceSeatIdx] = null;
           destTable.seats[destSeatIdx] = playerToMoveId;
@@ -824,14 +1023,19 @@ class Store {
   }
 
   // --- Log / History Methods ---
-  public addLog(type: HistoryEvent['type'], description: string, playerId?: string) {
+  public addLog(
+    type: HistoryEvent['type'],
+    description: string,
+    playerId?: string,
+    explicitPlayerName?: string,
+  ) {
     const player = playerId ? this.state.players.find(p => p.id === playerId) : undefined;
     const newEvent: HistoryEvent = {
       id: `h-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       timestamp: new Date().toISOString(),
       type,
       playerId,
-      playerName: player ? `${player.firstName} ${player.lastName}` : undefined,
+      playerName: explicitPlayerName ?? (player ? `${player.firstName} ${player.lastName}` : undefined),
       description
     };
     

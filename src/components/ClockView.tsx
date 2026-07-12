@@ -62,6 +62,35 @@ type FallingParticle = {
 
 type FallAsset = (typeof FINAL_TABLE_FALL_OBJECTS)[number];
 
+function playEliminatedSound(enabled: boolean) {
+  if (!enabled) return;
+
+  const audio = new Audio("/eliminated.mp3");
+  audio.play().catch(() => {
+    try {
+      const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextClass) return;
+
+      const ctx = new AudioContextClass();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(440, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(220, ctx.currentTime + 0.35);
+      gain.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.5);
+    } catch {
+      // Ignore audio fallback errors.
+    }
+  });
+}
+
 function pickVariedAssets(assets: readonly FallAsset[], count: number): FallAsset[] {
   if (assets.length === 0) return [];
   if (assets.length === 1) return Array.from({ length: count }, () => assets[0]);
@@ -338,15 +367,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
         
         // Play eliminated.mp3 if sound is enabled (no fallback beep/synth)
         if (clock.soundEnabled) {
-          try {
-            const audio = new Audio('/eliminated.mp3');
-            registerActiveAudio(audio);
-            audio.play().catch(err => {
-              console.warn("Could not play eliminated.mp3:", err);
-            });
-          } catch (e) {
-            console.warn("Audio playing error for eliminated.mp3:", e);
-          }
+          playEliminatedSound(true);
         }
         
         // Remove from blinking after exactly 7 seconds
@@ -359,7 +380,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
         }, 7000);
       });
     }
-  }, [history, clock.soundEnabled, registerActiveAudio]);
+  }, [history, clock.soundEnabled]);
 
   const activeLevel = settings.blindStructure[clock.currentLevelIndex] || {
     level: 1,
@@ -402,7 +423,12 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
 
   // Remaining playing players
   const totalPlayers = players.length;
-  const playingPlayers = players.filter(p => p.status === "Playing" || p.status === "Waiting");
+  const playingPlayers = players.filter(p =>
+    p.status === "Playing"
+    || p.status === "Waiting"
+    || p.status === "Registered"
+    || p.status === "Re-entry"
+  );
   const remainingPlayersCount = playingPlayers.length;
 
   const hasSeatedActivePlayers = useMemo(
