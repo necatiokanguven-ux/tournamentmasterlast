@@ -39,7 +39,7 @@ export default function TrackingLivePanelContainer({
         playersToItm={liveState.playersToItm}
         showFinalTableCongrats={showFinalTableCongrats}
       />
-      <TrackingLivePanel liveState={liveState} t={t} locale={locale} />
+      <TrackingLivePanel liveState={liveState} t={t} />
       {error && <p className="text-sm text-red-300">{error}</p>}
     </>
   );

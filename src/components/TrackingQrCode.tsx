@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import { localApi } from "../config/api";
 import { QrCode } from "lucide-react";
 import type { TrackingHealthResponse } from "../tracking/types";
 
@@ -17,7 +18,7 @@ export default function TrackingQrCode({ compact = false }: TrackingQrCodeProps)
 
     const loadTrackingUrl = async () => {
       try {
-        const response = await fetch("/api/tracking/health");
+        const response = await fetch(localApi("/api/tracking/health"));
         if (!response.ok) {
           throw new Error("Tracking server unavailable.");
         }

@@ -16,7 +16,14 @@ export function useTrackingLivePoll(enabled: boolean) {
       }
 
       const data = (await response.json()) as TrackingLiveState;
-      setLiveState((current) => mergeTrackingLiveState(current, data));
+      setLiveState((current) => {
+        try {
+          return mergeTrackingLiveState(current, data);
+        } catch (mergeError) {
+          console.error("Failed to merge tracking live state", mergeError);
+          return current;
+        }
+      });
       setError(null);
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : "Live tracking request failed.");

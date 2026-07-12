@@ -4,6 +4,7 @@
  */
 
 import { Player, Table, TournamentSettings, ClockState, HistoryEvent, BlindLevel, PayoutStructure } from "./types";
+import { localApi } from "./config/api";
 
 export interface AppState {
   settings: TournamentSettings;
@@ -87,7 +88,7 @@ class Store {
   // Load from backend
   public async load() {
     try {
-      const res = await fetch("/api/data");
+      const res = await fetch(localApi("/api/data"));
       const data = await res.json();
       if (data && data.players) {
         const settings = {
@@ -123,7 +124,7 @@ class Store {
   // Save to backend
   private async saveToBackend() {
     try {
-      await fetch("/api/save", {
+      await fetch(localApi("/api/save"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(this.state)
@@ -136,7 +137,7 @@ class Store {
   // Reset database
   public async reset() {
     try {
-      const res = await fetch("/api/reset", { method: "POST" });
+      const res = await fetch(localApi("/api/reset"), { method: "POST" });
       const resData = await res.json();
       if (resData.success && resData.data) {
         const data = resData.data;

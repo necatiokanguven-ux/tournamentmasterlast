@@ -3,29 +3,65 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import LocalServerBanner from "./components/LocalServerBanner";
 import ClockView from "./components/ClockView";
 import SettingsView from "./components/SettingsView";
 import PlayersView from "./components/PlayersView";
 import TablesView from "./components/TablesView";
 import ReportsView from "./components/ReportsView";
 import DisplayView from "./components/DisplayView";
-import { Timer, Settings, Users, Grid, FileText, ChevronLeft, ChevronRight, Monitor } from "lucide-react";
+import LicenseView from "./components/LicenseView";
+import { useLicenseStatus } from "./license/useLicenseStatus";
+import { Timer, Settings, Users, Grid, FileText, ChevronLeft, ChevronRight, Monitor, KeyRound, Lock } from "lucide-react";
 
-type AppTab = "clock" | "settings" | "players" | "tables" | "reports" | "display";
+type AppTab = "clock" | "license" | "settings" | "players" | "tables" | "reports" | "display";
 
 export default function App() {
+  const { isLicensed, loading: licenseLoading, status: licenseStatus } = useLicenseStatus();
   const [activeTab, setActiveTab] = useState<AppTab>("clock");
   const [isNavCollapsed, setIsNavCollapsed] = useState(false);
   const [pendingClockFullscreen, setPendingClockFullscreen] = useState(false);
 
+  useEffect(() => {
+    if (!licenseLoading && !isLicensed) {
+      setActiveTab("license");
+    }
+  }, [licenseLoading, isLicensed]);
+
   const handleLaunchClockFullscreen = () => {
+    if (!isLicensed) {
+      setActiveTab("license");
+      return;
+    }
+
     setPendingClockFullscreen(true);
     setActiveTab("clock");
   };
 
+  const handleTabSelect = (tab: AppTab) => {
+    if (!isLicensed && tab !== "license") {
+      setActiveTab("license");
+      return;
+    }
+
+    setActiveTab(tab);
+  };
+
   return (
-    <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden font-sans">
+    <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden font-sans flex-col">
+      <LocalServerBanner />
+      {!licenseLoading && !isLicensed && (
+        <div className="bg-red-500/10 border-b border-red-500/30 px-4 py-3 text-red-200 text-sm flex items-start gap-2">
+          <Lock className="w-4 h-4 mt-0.5 shrink-0 text-red-400" />
+          <p>
+            Tournament Master is locked until you activate a license key. Open{" "}
+            <strong className="text-red-100">License Key</strong> from the left menu.
+            {licenseStatus?.message ? ` ${licenseStatus.message}` : ""}
+          </p>
+        </div>
+      )}
+      <div className="flex flex-1 overflow-hidden">
       
       {/* Sidebar Navigation Panel (collapses on fullscreen print and option toggle) */}
       <aside 
@@ -55,6 +91,7 @@ export default function App() {
           <nav className="p-3 space-y-1.5 flex-1">
             {[
               { id: "clock", label: "Tournament Clock", icon: Timer, color: "text-red-500" },
+              { id: "license", label: "License Key", icon: KeyRound, color: "text-amber-400" },
               { id: "display", label: "Display Manager", icon: Monitor, color: "text-cyan-500" },
               { id: "tables", label: "Tables", icon: Grid, color: "text-emerald-500" },
               { id: "players", label: "Player Management", icon: Users, color: "text-blue-500" },
@@ -63,19 +100,28 @@ export default function App() {
             ].map((nav) => {
               const Icon = nav.icon;
               const active = activeTab === nav.id;
+              const locked = !isLicensed && nav.id !== "license";
               return (
                 <button
                   key={nav.id}
-                  onClick={() => setActiveTab(nav.id as AppTab)}
+                  onClick={() => handleTabSelect(nav.id as AppTab)}
+                  disabled={licenseLoading}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${
-                    active 
-                      ? "bg-gradient-to-r from-zinc-800 to-zinc-900/40 border border-zinc-800 text-zinc-100 font-extrabold shadow-sm" 
-                      : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/40"
+                    active
+                      ? "bg-gradient-to-r from-zinc-800 to-zinc-900/40 border border-zinc-800 text-zinc-100 font-extrabold shadow-sm"
+                      : locked
+                        ? "text-zinc-600 cursor-not-allowed opacity-60"
+                        : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/40"
                   }`}
-                  title={isNavCollapsed ? nav.label : ""}
+                  title={isNavCollapsed ? nav.label : locked ? "Activate a license key first" : nav.label}
                 >
                   <Icon className={`w-4 h-4 ${nav.color}`} />
-                  {!isNavCollapsed && <span>{nav.label}</span>}
+                  {!isNavCollapsed && (
+                    <span className="flex items-center gap-2">
+                      {nav.label}
+                      {locked && <Lock className="w-3 h-3 text-zinc-600" />}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -97,19 +143,22 @@ export default function App() {
         }`}
         id="main-content-canvas"
       >
-        {activeTab === "clock" && (
+        {activeTab === "clock" && isLicensed && (
           <ClockView
             pendingFullscreen={pendingClockFullscreen}
             onFullscreenHandled={() => setPendingClockFullscreen(false)}
           />
         )}
-        {activeTab === "display" && <DisplayView onLaunchClockFullscreen={handleLaunchClockFullscreen} />}
-        {activeTab === "settings" && <SettingsView />}
-        {activeTab === "players" && <PlayersView />}
-        {activeTab === "tables" && <TablesView />}
-        {activeTab === "reports" && <ReportsView />}
+        {activeTab === "display" && isLicensed && <DisplayView onLaunchClockFullscreen={handleLaunchClockFullscreen} />}
+        {activeTab === "license" && <LicenseView />}
+        {activeTab === "settings" && isLicensed && <SettingsView />}
+        {activeTab === "players" && isLicensed && <PlayersView />}
+        {activeTab === "tables" && isLicensed && <TablesView />}
+        {activeTab === "reports" && isLicensed && <ReportsView />}
+        {!licenseLoading && !isLicensed && activeTab !== "license" && <LicenseView />}
       </main>
 
+      </div>
     </div>
   );
 }

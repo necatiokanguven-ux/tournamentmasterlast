@@ -99,6 +99,22 @@ export function createTrackingRouter(port: number, getData: TrackingDataSource) 
     }));
   });
 
+  router.get("/payouts", (_req, res) => {
+    const data = getData();
+    const liveState = buildTrackingLiveState({
+      settings: data.settings,
+      clock: data.clock,
+      players: data.players,
+      payouts: data.payouts,
+    });
+
+    res.json({
+      prizePool: liveState.prizePool,
+      currency: liveState.currency,
+      payouts: liveState.payouts,
+    });
+  });
+
   router.get("/status", (_req, res) => {
     const data = getData();
     const seatedPlayers = data.players.filter(

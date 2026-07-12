@@ -2,14 +2,17 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
-import { Player, Table, TournamentSettings, ClockState, HistoryEvent } from "./src/types";
+import { Player, Table, TournamentSettings, ClockState, HistoryEvent } from "./types";
 import { createTrackingRouter } from "./src/tracking/trackingRoutes";
+import { registerLicenseRoutes, requireValidLicense } from "./src/license/serverRoutes";
+import { applyLocalServerCors } from "./src/config/cors";
 
 const app = express();
 const PORT = 3000;
 const DB_FILE = path.join(process.cwd(), "db.json");
 
 app.use(express.json());
+applyLocalServerCors(app);
 
 // Helper to load database with rich defaults matching screenshot_100.png exactly
 function loadDatabase() {
@@ -244,18 +247,20 @@ function saveDatabase(data: any) {
 // Ensure database file is generated
 let db = loadDatabase();
 
+const licenseGuard = requireValidLicense();
+
 // API Endpoints
-app.get("/api/data", (req, res) => {
+app.get("/api/data", licenseGuard, (req, res) => {
   res.json(db);
 });
 
-app.post("/api/save", (req, res) => {
+app.post("/api/save", licenseGuard, (req, res) => {
   db = req.body;
   saveDatabase(db);
   res.json({ success: true, message: "Database saved successfully" });
 });
 
-app.post("/api/reset", (req, res) => {
+app.post("/api/reset", licenseGuard, (req, res) => {
   if (fs.existsSync(DB_FILE)) {
     fs.unlinkSync(DB_FILE);
   }
@@ -264,7 +269,17 @@ app.post("/api/reset", (req, res) => {
 });
 
 // QR Live Tracking — local read-only tracking server
-app.use("/api/tracking", createTrackingRouter(PORT, () => db));
+app.use("/api/tracking", (req, res, next) => {
+  if (req.path === "/ping") {
+    next();
+    return;
+  }
+
+  licenseGuard(req, res, next);
+}, createTrackingRouter(PORT, () => db));
+
+// License machine ID + local license storage
+registerLicenseRoutes(app);
 
 // Setup Vite Dev Server / Prod Server Static
 async function startServer() {

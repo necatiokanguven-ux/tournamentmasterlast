@@ -44,6 +44,14 @@ export type TrackingTranslations = {
   bubblePlayersLeft: (count: number) => string;
   finalTableCongratulations: string;
   finalTableReached: string;
+  totalPrizePool: string;
+  tapForFullPrizePool: string;
+  viewPayoutDistribution: string;
+  payoutPlace: string;
+  payoutPercent: string;
+  payoutAmount: string;
+  noPayoutStructure: string;
+  close: string;
 };
 
 const en: TrackingTranslations = {
@@ -90,6 +98,14 @@ const en: TrackingTranslations = {
   bubblePlayersLeft: (count) => `${count} player${count === 1 ? "" : "s"} left.`,
   finalTableCongratulations: "Congratulations",
   finalTableReached: "You reached Final Table",
+  totalPrizePool: "Total Prize Pool",
+  tapForFullPrizePool: "Tap for full prize pool",
+  viewPayoutDistribution: "Payout Distribution",
+  payoutPlace: "Place",
+  payoutPercent: "Share",
+  payoutAmount: "Amount",
+  noPayoutStructure: "Payout structure is not configured yet.",
+  close: "Close",
 };
 
 const tr: TrackingTranslations = {
@@ -136,6 +152,14 @@ const tr: TrackingTranslations = {
   bubblePlayersLeft: (count) => `${count} kişi kaldı.`,
   finalTableCongratulations: "Congratulations",
   finalTableReached: "You reached Final Table",
+  totalPrizePool: "Toplam Ödül Havuzu",
+  tapForFullPrizePool: "Tam ödül havuzu için dokunun",
+  viewPayoutDistribution: "Ödül Dağılımı",
+  payoutPlace: "Sıra",
+  payoutPercent: "Oran",
+  payoutAmount: "Tutar",
+  noPayoutStructure: "Ödül dağılımı henüz ayarlanmadı.",
+  close: "Kapat",
 };
 
 const de: TrackingTranslations = {

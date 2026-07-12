@@ -75,16 +75,15 @@ export function formatPrizeAmount(amount: number, currency?: string | null, loca
     : `${formattedAmount} ${config.symbol}`;
 }
 
-export function formatPrizeAmountWithSymbol(
-  amount: number,
-  symbol: string,
-  currency?: string | null,
-  locale?: string | null,
-): string {
+export function formatTrackingPrizeAmount(amount: number, currency?: string | null): string {
   const config = getCurrencyConfig(currency);
-  const formattedAmount = formatPrizeNumber(amount, locale);
+  const safeAmount = Number.isFinite(amount) ? Math.round(amount) : 0;
+  const formattedAmount = safeAmount.toLocaleString("tr-TR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  });
 
   return config.position === "prefix"
-    ? `${symbol}${formattedAmount}`
-    : `${formattedAmount} ${symbol}`;
+    ? `${config.symbol}${formattedAmount}`
+    : `${formattedAmount} ${config.symbol}`;
 }
