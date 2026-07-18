@@ -1,15 +1,60 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
-import { Player, Table, TournamentSettings, ClockState, HistoryEvent } from "./types";
+import { exec } from "child_process";
+import { Player, Table, TournamentSettings, ClockState, HistoryEvent } from "./src/types";
 import { createTrackingRouter } from "./src/tracking/trackingRoutes";
 import { registerLicenseRoutes, requireValidLicense } from "./src/license/serverRoutes";
 import { applyLocalServerCors } from "./src/config/cors";
+import { normalizeDatabase, bumpDatabaseMeta, type TournamentDatabase } from "./src/server/tournamentDatabase";
+import { createDealerRouter } from "./src/dealer/dealerRoutes";
+import { createFloorRouter, createSettingsRouter } from "./src/floor/floorRoutes";
 
 const app = express();
 const PORT = 3000;
 const DB_FILE = path.join(process.cwd(), "db.json");
+const LOGS_DIR = path.join(process.cwd(), "logs");
+const loggedEventIds = new Set<string>();
+
+function formatActivityLogLine(event: HistoryEvent): string {
+  const timestamp = new Date(event.timestamp).toLocaleString();
+  const player = event.playerName ? ` [${event.playerName}]` : "";
+  return `[${timestamp}] ${event.type.toUpperCase()}${player}: ${event.description}`;
+}
+
+function ensureLogsDir() {
+  if (!fs.existsSync(LOGS_DIR)) {
+    fs.mkdirSync(LOGS_DIR, { recursive: true });
+  }
+}
+
+function getActivityLogPath(tournamentId: string) {
+  const safeId = (tournamentId || "tournament").replace(/[^\w\-]+/g, "_");
+  return path.join(LOGS_DIR, `${safeId}-activity.log`);
+}
+
+function registerExistingHistory(history: HistoryEvent[] = []) {
+  for (const event of history) {
+    loggedEventIds.add(event.id);
+  }
+}
+
+function appendActivityLog(history: HistoryEvent[] = [], tournamentId: string) {
+  const newEvents = history.filter((event) => !loggedEventIds.has(event.id));
+  if (newEvents.length === 0) return;
+
+  ensureLogsDir();
+  const logPath = getActivityLogPath(tournamentId);
+  const chronological = [...newEvents].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+  );
+  const lines = chronological.map((event) => formatActivityLogLine(event)).join("\n") + "\n";
+  fs.appendFileSync(logPath, lines, "utf-8");
+
+  for (const event of newEvents) {
+    loggedEventIds.add(event.id);
+  }
+}
 
 app.use(express.json());
 applyLocalServerCors(app);
@@ -41,9 +86,9 @@ function loadDatabase() {
       const raw = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
       const sanitized = sanitizeDatabase(raw);
       if (Array.isArray(raw.players) && Array.isArray(sanitized.players) && sanitized.players.length !== raw.players.length) {
-        saveDatabase(sanitized);
+        return persistDatabase(sanitized);
       }
-      return sanitized;
+      return normalizeDatabase(sanitized);
     } catch (e) {
       console.error("Error reading database, using defaults", e);
     }
@@ -232,43 +277,90 @@ function loadDatabase() {
     clock: defaultClock,
     players: players,
     tables: tables,
-    history: defaultHistory
+    history: defaultHistory,
+    payouts: [],
+    floorCalls: [],
+    meta: { lastModified: Date.now() },
   };
 
-  saveDatabase(db);
-  return db;
+  return persistDatabase(db);
 }
 
-function saveDatabase(data: any) {
+function persistDatabase(data: Partial<TournamentDatabase>): TournamentDatabase {
+  const normalized = normalizeDatabase(data);
+  bumpDatabaseMeta(normalized);
+  const tempPath = `${DB_FILE}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(normalized, null, 2), "utf-8");
+  fs.renameSync(tempPath, DB_FILE);
+  appendActivityLog(normalized.history || [], normalized.settings?.id || "tournament");
+  return normalized;
+}
+
+function saveDatabase(data: TournamentDatabase) {
   try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf-8");
+    db = persistDatabase(data);
   } catch (e) {
     console.error("Error writing database file", e);
   }
 }
 
 // Ensure database file is generated
-let db = loadDatabase();
+let db: TournamentDatabase = normalizeDatabase(loadDatabase());
+registerExistingHistory(db.history || []);
 
 const licenseGuard = requireValidLicense();
+
+function getDb(): TournamentDatabase {
+  return db;
+}
+
+function setDb(next: TournamentDatabase) {
+  saveDatabase(next);
+}
 
 // API Endpoints
 app.get("/api/data", licenseGuard, (req, res) => {
   res.json(db);
 });
 
+app.get("/api/data/meta", licenseGuard, (_req, res) => {
+  res.json({ lastModified: db.meta.lastModified });
+});
+
 app.post("/api/save", licenseGuard, (req, res) => {
-  db = req.body;
-  saveDatabase(db);
-  res.json({ success: true, message: "Database saved successfully" });
+  saveDatabase(
+    normalizeDatabase({
+      ...req.body,
+      floorCalls: Array.isArray(req.body?.floorCalls) ? req.body.floorCalls : db.floorCalls,
+    }),
+  );
+  res.json({ success: true, message: "Database saved successfully", lastModified: db.meta.lastModified });
 });
 
 app.post("/api/reset", licenseGuard, (req, res) => {
   if (fs.existsSync(DB_FILE)) {
     fs.unlinkSync(DB_FILE);
   }
-  db = loadDatabase();
+  db = normalizeDatabase(loadDatabase());
+  registerExistingHistory(db.history || []);
   res.json({ success: true, data: db, message: "Database reset to factory defaults" });
+});
+
+app.get("/api/activity-log", licenseGuard, (req, res) => {
+  const tournamentId = db.settings?.id || "tournament";
+  const logPath = getActivityLogPath(tournamentId);
+
+  if (fs.existsSync(logPath)) {
+    res.type("text/plain").send(fs.readFileSync(logPath, "utf-8"));
+    return;
+  }
+
+  const fallback = [...(db.history || [])]
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+    .map((event) => formatActivityLogLine(event))
+    .join("\n");
+
+  res.type("text/plain").send(fallback);
 });
 
 // QR Live Tracking — local read-only tracking server
@@ -281,12 +373,37 @@ app.use("/api/tracking", (req, res, next) => {
   licenseGuard(req, res, next);
 }, createTrackingRouter(PORT, () => db));
 
+app.use("/api/dealer", licenseGuard, createDealerRouter(PORT, getDb, setDb));
+app.use("/api/floor", licenseGuard, createFloorRouter(PORT, getDb, setDb));
+app.use("/api/settings", licenseGuard, createSettingsRouter(getDb, setDb));
+
 // License machine ID + local license storage
 registerLicenseRoutes(app);
+
+function openBrowser(url: string) {
+  if (process.env.TM_AUTO_OPEN_BROWSER === "0") {
+    return;
+  }
+
+  const command =
+    process.platform === "win32"
+      ? `start "" "${url}"`
+      : process.platform === "darwin"
+        ? `open "${url}"`
+        : `xdg-open "${url}"`;
+
+  exec(command, { shell: process.platform === "win32" ? "cmd.exe" : "/bin/sh" }, (error) => {
+    if (error) {
+      console.error("Could not open browser automatically:", error.message);
+      console.log(`Open this URL manually: ${url}`);
+    }
+  });
+}
 
 // Setup Vite Dev Server / Prod Server Static
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -300,9 +417,13 @@ async function startServer() {
     });
   }
 
+  const appUrl = `http://localhost:${PORT}`;
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Express server listening on http://localhost:${PORT}`);
-    console.log(`QR Live Tracking (Phase 1): http://localhost:${PORT}/track`);
+    console.log(`Express server listening on ${appUrl}`);
+    console.log(`QR Live Tracking (Phase 1): ${appUrl}/track`);
+    console.log(`Dealer Tablet: ${appUrl}/dealer/setup?table=1`);
+    console.log(`Floor Mobile: ${appUrl}/floor?team=floor-1`);
+    openBrowser(appUrl);
   });
 }
 

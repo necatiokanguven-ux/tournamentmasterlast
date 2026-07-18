@@ -59,6 +59,26 @@ export type TournamentCurrency =
   | 'CAD'
   | 'AUD';
 
+export interface FloorTeam {
+  id: string;
+  name: string;
+  tableNumbers: number[];
+}
+
+export type FloorCallStatus = 'pending' | 'acknowledged' | 'resolved';
+
+export interface FloorCall {
+  id: string;
+  tableNumber: number;
+  tableId: string;
+  teamId: string;
+  status: FloorCallStatus;
+  createdAt: string;
+  acknowledgedAt: string | null;
+  acknowledgedBy: string | null;
+  resolvedAt: string | null;
+}
+
 export interface TournamentSettings {
   id: string;
   name: string;
@@ -81,6 +101,9 @@ export interface TournamentSettings {
   isMultiDay?: boolean;
   totalDays?: number;
   currentDay?: number;
+  dealerCallTimeSeconds?: number;
+  dealerPlayerTimeSeconds?: number;
+  floorTeams?: FloorTeam[];
 }
 
 export interface ClockState {
@@ -95,7 +118,7 @@ export interface ClockState {
 export interface HistoryEvent {
   id: string;
   timestamp: string;
-  type: 'registration' | 'seating' | 'bust' | 'rebuy' | 'reentry' | 'addon' | 'disqualify' | 'move' | 'balance' | 'undo';
+  type: 'registration' | 'seating' | 'bust' | 'rebuy' | 'reentry' | 'addon' | 'disqualify' | 'move' | 'balance' | 'undo' | 'clock' | 'level' | 'settings';
   playerId?: string;
   playerName?: string;
   description: string;

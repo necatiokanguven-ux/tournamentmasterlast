@@ -5,13 +5,20 @@
 
 import React, { useState } from "react";
 import { useTournament } from "../useTournament";
-import { FileText, Printer, FileSpreadsheet, ListOrdered, CircleDollarSign, HelpCircle, Activity } from "lucide-react";
+import { FileText, Printer, FileSpreadsheet, ListOrdered, CircleDollarSign, HelpCircle, Activity, ScrollText, Download } from "lucide-react";
+import { localApi } from "../config/api";
 
 export default function ReportsView() {
   const { state } = useTournament();
   const { players, tables, settings, payouts, history } = state;
 
-  const [activeReport, setActiveReport] = useState<"chips" | "players" | "payouts" | "tables" | "eliminations">("chips");
+  const [activeReport, setActiveReport] = useState<"chips" | "players" | "payouts" | "tables" | "eliminations" | "activity">("chips");
+
+  const activityLog = [...history].sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+  );
+
+  const formatActivityType = (type: string) => type.replace(/_/g, " ").toUpperCase();
 
   // Calculations
   const chipLeaders = [...players]
@@ -29,11 +36,51 @@ export default function ReportsView() {
     window.print();
   };
 
+  const exportActivityLogTxt = async () => {
+    try {
+      const response = await fetch(localApi("/api/activity-log"));
+      const text = await response.text();
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `tournament_activity_log_${settings.id || "tournament"}_${Date.now()}.txt`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      const fallback = activityLog
+        .slice()
+        .reverse()
+        .map((event) => {
+          const timestamp = new Date(event.timestamp).toLocaleString();
+          const player = event.playerName ? ` [${event.playerName}]` : "";
+          return `[${timestamp}] ${event.type.toUpperCase()}${player}: ${event.description}`;
+        })
+        .join("\n");
+      const blob = new Blob([fallback], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `tournament_activity_log_${settings.id || "tournament"}_${Date.now()}.txt`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    }
+  };
+
   // Export to simple CSV
   const exportCSV = () => {
     let csvContent = "data:text/csv;charset=utf-8,";
     
-    if (activeReport === "chips") {
+    if (activeReport === "activity") {
+      csvContent += "Timestamp,Type,Player,Description\n";
+      activityLog.slice().reverse().forEach((event) => {
+        csvContent += `"${new Date(event.timestamp).toLocaleString()}","${event.type}","${event.playerName || ""}","${event.description.replace(/"/g, '""')}"\n`;
+      });
+    } else if (activeReport === "chips") {
       csvContent += "Rank,Player Name,Nickname,Country,Chip Count\n";
       chipLeaders.forEach((p, idx) => {
         csvContent += `${idx + 1},"${p.firstName} ${p.lastName}","${p.nickname}","${p.country}",${p.chips}\n`;
@@ -84,6 +131,14 @@ export default function ReportsView() {
             <p className="text-zinc-400 text-xs mt-1">Generate lists of chip leads, cash payout ratios, active tables, or rebuy statistics.</p>
           </div>
           <div className="flex items-center gap-2">
+            {activeReport === "activity" && (
+              <button
+                onClick={exportActivityLogTxt}
+                className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-1.5"
+              >
+                <Download className="w-4 h-4 text-blue-400" /> Export Log (.txt)
+              </button>
+            )}
             <button 
               onClick={exportCSV}
               className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-1.5"
@@ -106,7 +161,8 @@ export default function ReportsView() {
             { id: "players", label: "Rebuy / Financials Report", icon: Activity },
             { id: "payouts", label: "Cash Payout Ratios", icon: CircleDollarSign },
             { id: "tables", label: "Active Table Allocations", icon: FileText },
-            { id: "eliminations", label: "Elimination Ordering", icon: HelpCircle }
+            { id: "eliminations", label: "Elimination Ordering", icon: HelpCircle },
+            { id: "activity", label: "Tournament Activity Log", icon: ScrollText }
           ].map((tab) => {
             const Icon = tab.icon;
             const active = activeReport === tab.id;
@@ -332,6 +388,55 @@ export default function ReportsView() {
                     {eliminationOrder.length === 0 && (
                       <tr>
                         <td colSpan={5} className="py-8 text-center text-zinc-500 italic">No player eliminations registered yet</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* 6. TOURNAMENT ACTIVITY LOG */}
+          {activeReport === "activity" && (
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-2">
+                <h3 className="text-sm font-black uppercase tracking-widest text-amber-500 print:text-black">
+                  TOURNAMENT ACTIVITY LOG
+                </h3>
+                <span className="text-[10px] text-zinc-500 font-mono font-bold uppercase">
+                  Total Events: {activityLog.length}
+                </span>
+              </div>
+              <div className="overflow-x-auto max-h-[700px] overflow-y-auto">
+                <table className="w-full text-left">
+                  <thead className="sticky top-0 bg-zinc-950/95 backdrop-blur z-10">
+                    <tr className="text-[10px] font-black uppercase text-zinc-400 border-b border-zinc-850 print:text-black">
+                      <th className="py-2.5 pr-4">Timestamp</th>
+                      <th className="py-2.5 pr-4">Type</th>
+                      <th className="py-2.5 pr-4">Player</th>
+                      <th className="py-2.5">Description</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800/50 text-sm print:text-black">
+                    {activityLog.map((event) => (
+                      <tr key={event.id}>
+                        <td className="py-2.5 pr-4 font-mono text-zinc-400 whitespace-nowrap">
+                          {new Date(event.timestamp).toLocaleString()}
+                        </td>
+                        <td className="py-2.5 pr-4 font-bold uppercase text-amber-500/90 whitespace-nowrap">
+                          {formatActivityType(event.type)}
+                        </td>
+                        <td className="py-2.5 pr-4 font-medium">
+                          {event.playerName || "—"}
+                        </td>
+                        <td className="py-2.5 text-zinc-200">{event.description}</td>
+                      </tr>
+                    ))}
+                    {activityLog.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="py-8 text-center text-zinc-500 italic">
+                          No tournament activity logged yet
+                        </td>
                       </tr>
                     )}
                   </tbody>

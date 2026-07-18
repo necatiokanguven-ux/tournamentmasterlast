@@ -2,7 +2,8 @@ import React, { useEffect, useState } from "react";
 import { KeyRound, ShieldCheck, ShieldAlert, Loader2 } from "lucide-react";
 import { isCloudHostedApp } from "../config/api";
 import type { LocalLicenseStatus } from "../license/config";
-import { activateLicenseKey, fetchLicenseStatus } from "../license/licenseClient";
+import { activateLicenseKey, claimPaidLicenseForMachine, fetchLicenseStatus } from "../license/licenseClient";
+import LicenseUpgradeButtons from "./LicenseUpgradeButtons";
 
 type LicenseSettingsProps = {
   variant?: "embedded" | "page";
@@ -13,6 +14,7 @@ export default function LicenseSettings({ variant = "embedded" }: LicenseSetting
   const [status, setStatus] = useState<LocalLicenseStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [activating, setActivating] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isCloudApp = isCloudHostedApp();
 
@@ -52,6 +54,24 @@ export default function LicenseSettings({ variant = "embedded" }: LicenseSetting
       setError(activateError instanceof Error ? activateError.message : "License activation failed.");
     } finally {
       setActivating(false);
+    }
+  };
+
+  const handleSync = async () => {
+    setSyncing(true);
+    setError(null);
+
+    try {
+      const data = await claimPaidLicenseForMachine();
+      setStatus(data);
+      if (data.licenseKey) {
+        setLicenseKey(data.licenseKey);
+      }
+      window.dispatchEvent(new Event("license-updated"));
+    } catch (syncError) {
+      setError(syncError instanceof Error ? syncError.message : "Could not sync upgraded license.");
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -123,7 +143,7 @@ export default function LicenseSettings({ variant = "embedded" }: LicenseSetting
 
           {error && <p className="text-red-400 text-xs mt-3">{error}</p>}
 
-          <div className="flex gap-2 mt-4">
+          <div className="flex flex-wrap gap-2 mt-4">
             <button
               type="button"
               onClick={() => void handleActivate()}
@@ -139,7 +159,19 @@ export default function LicenseSettings({ variant = "embedded" }: LicenseSetting
             >
               Refresh
             </button>
+            {status?.valid && (
+              <button
+                type="button"
+                onClick={() => void handleSync()}
+                disabled={syncing}
+                className="px-4 py-2.5 bg-zinc-100 hover:bg-white disabled:opacity-60 text-black rounded-xl text-xs font-bold uppercase tracking-wider"
+              >
+                {syncing ? "Syncing..." : "Sync Upgrade"}
+              </button>
+            )}
           </div>
+
+          <LicenseUpgradeButtons machineId={status?.machineId} />
         </>
       )}
     </div>

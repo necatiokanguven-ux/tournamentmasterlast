@@ -508,7 +508,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
     if (!isFinalTable || finalTableFallPhase !== "scripted") return;
 
     let cancelled = false;
-    const timeouts: ReturnType<typeof setTimeout>[] = [];
+    const timeouts: number[] = [];
 
     const runCycle = (cycle: number) => {
       if (cancelled) return;
@@ -1390,6 +1390,10 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
                   reentry: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
                   balance: "text-amber-400 bg-amber-500/10 border-amber-500/20",
                   undo: "text-zinc-400 bg-zinc-500/10 border-zinc-500/20",
+                  clock: "text-cyan-400 bg-cyan-500/10 border-cyan-500/20",
+                  level: "text-orange-400 bg-orange-500/10 border-orange-500/20",
+                  settings: "text-teal-400 bg-teal-500/10 border-teal-500/20",
+                  move: "text-violet-400 bg-violet-500/10 border-violet-500/20",
                   seating: "text-indigo-400 bg-indigo-500/10 border-indigo-500/20",
                   addon: "text-pink-400 bg-pink-500/10 border-pink-500/20",
                   disqualify: "text-purple-400 bg-purple-500/10 border-purple-500/20"
@@ -1401,7 +1405,11 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
                   rebuy: "💰",
                   reentry: "🔄",
                   balance: "⚖️",
-                  undo: "⚙️",
+                  undo: "↩️",
+                  clock: "⏱️",
+                  level: "📈",
+                  settings: "⚙️",
+                  move: "↔️",
                   seating: "🪑",
                   addon: "➕",
                   disqualify: "🚫"
@@ -1633,7 +1641,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
         {/* Logo: right side, vertically aligned with prize payout row */}
         <div className="flex items-center justify-end shrink-0 self-end md:self-center pr-1 md:pr-2 mt-[15px]" id="footer-logo-block">
           <img 
-            src="/logo.png?v=1.0.5" 
+            src="/logo.png?v=1.0.7" 
             alt="Club Poker Logo" 
             className="h-24 sm:h-28 md:h-32 lg:h-36 w-auto max-w-[200px] sm:max-w-[240px] md:max-w-[280px] object-contain bg-transparent border-0 drop-shadow-[0_4px_16px_rgba(255,255,255,0.08)]"
             referrerPolicy="no-referrer"

@@ -5,8 +5,11 @@
 
 import React, { useState, useMemo } from "react";
 import { useTournament } from "../useTournament";
-import { Plus, Trash2, ShieldAlert, Users, Grid, RefreshCw, X, UserCheck, Undo2 } from "lucide-react";
+import { Plus, Trash2, ShieldAlert, Users, Grid, RefreshCw, X, UserCheck, Undo2, QrCode, PhoneCall, Timer } from "lucide-react";
 import { Table } from "../types";
+import TableQrModal from "./TableQrModal";
+import FloorSetupModal from "./FloorSetupModal";
+import DealerTimerSettingsModal from "./DealerTimerSettingsModal";
 
 export default function TablesView() {
   const {
@@ -19,23 +22,31 @@ export default function TablesView() {
     swapPlayers,
     balanceTables,
     deletePlayer,
+    bustPlayer,
     undoTableAction,
     getTableUndoCount,
     getWaitingListPlayers,
+    saveFloorTeams,
+    saveDealerTimers,
   } = useTournament();
 
-  const { players, tables } = state;
+  const { players, tables, settings } = state;
   const undoCount = getTableUndoCount();
   const waitingPlayers = useMemo(() => getWaitingListPlayers(), [players, tables]);
 
   const [selectedTableId, setSelectedTableId] = useState<string | null>(tables[0]?.id || null);
+  const [qrTableNumber, setQrTableNumber] = useState<number | null>(null);
+  const [floorSetupOpen, setFloorSetupOpen] = useState(false);
+  const [timerSettingsOpen, setTimerSettingsOpen] = useState(false);
 
   const [modal, setModal] = useState<{
     isOpen: boolean;
-    type: "info" | "confirm_delete";
+    type: "info" | "confirm_delete" | "confirm_bust" | "confirm_remove_waiting";
     title: string;
     message: string;
     tableIdToDelete?: string;
+    playerIdToBust?: string;
+    playerNameToBust?: string;
   }>({
     isOpen: false,
     type: "info",
@@ -181,11 +192,44 @@ export default function TablesView() {
   };
 
   const handleRemovePlayer = (playerId: string) => {
-    deletePlayer(playerId);
+    const player = getPlayer(playerId);
+    if (!player) return;
+
+    setModal({
+      isOpen: true,
+      type: "confirm_bust",
+      title: "Eliminate Player",
+      message: `${player.firstName} ${player.lastName} — oyuncuyu silmek istediğinizden emin misiniz?`,
+      playerIdToBust: playerId,
+      playerNameToBust: `${player.firstName} ${player.lastName}`,
+    });
+  };
+
+  const handleConfirmBustPlayer = () => {
+    if (modal.playerIdToBust) {
+      bustPlayer(modal.playerIdToBust);
+    }
+    setModal(prev => ({ ...prev, isOpen: false, playerIdToBust: undefined, playerNameToBust: undefined }));
   };
 
   const handleDeleteWaitingPlayer = (playerId: string) => {
-    deletePlayer(playerId);
+    const player = getPlayer(playerId);
+    if (!player) return;
+
+    setModal({
+      isOpen: true,
+      type: "confirm_remove_waiting",
+      title: "Remove From Waiting List",
+      message: `${player.firstName} ${player.lastName} — waiting list'ten kaldırmak istediğinizden emin misiniz?`,
+      playerIdToBust: playerId,
+    });
+  };
+
+  const handleConfirmRemoveWaitingPlayer = () => {
+    if (modal.playerIdToBust) {
+      deletePlayer(modal.playerIdToBust);
+    }
+    setModal(prev => ({ ...prev, isOpen: false, playerIdToBust: undefined }));
   };
 
   const renderTableCard = (table: Table) => {
@@ -196,10 +240,23 @@ export default function TablesView() {
         key={table.id}
         className="bg-zinc-900/65 border border-zinc-800 rounded-md p-1.5 shadow-md flex flex-col transition hover:border-zinc-700"
       >
-        <div className="flex items-center justify-between mb-0.5">
-          <h2 className="text-[10px] font-black tracking-widest text-amber-400 uppercase leading-none">
-            TABLE {table.number}
-          </h2>
+        <div className="flex items-center justify-between mb-0.5 gap-1">
+          <div className="flex items-center gap-1 min-w-0">
+            <h2 className="text-[10px] font-black tracking-widest text-amber-400 uppercase leading-none">
+              TABLE {table.number}
+            </h2>
+            <button
+              type="button"
+              onClick={() => setQrTableNumber(table.number)}
+              className="px-1 py-0.5 rounded border border-amber-500/20 bg-amber-500/10 text-[8px] font-black uppercase text-amber-300 hover:bg-amber-500/20"
+              title="Dealer Tablet QR"
+            >
+              <span className="inline-flex items-center gap-0.5">
+                <QrCode className="w-2.5 h-2.5" />
+                QR
+              </span>
+            </button>
+          </div>
           <button
             onClick={() => handleDeleteTableClick(table.id, occupants > 0)}
             className="p-0.5 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded transition"
@@ -264,7 +321,7 @@ export default function TablesView() {
                       handleRemovePlayer(player.id);
                     }}
                     className="w-5 h-5 rounded bg-red-950/40 border border-red-900/50 hover:border-red-500 hover:bg-red-500/20 text-red-400 hover:text-red-300 transition flex items-center justify-center shrink-0"
-                    title="Remove player from tournament"
+                    title="Eliminate player from tournament"
                   >
                     <Trash2 className="w-2.5 h-2.5" />
                   </button>
@@ -287,6 +344,20 @@ export default function TablesView() {
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setFloorSetupOpen(true)}
+              className="px-2.5 py-1 bg-zinc-900 border border-orange-500/30 hover:bg-orange-500/10 rounded-lg text-[10px] font-bold uppercase tracking-wider transition flex items-center gap-1 text-orange-300"
+            >
+              <PhoneCall className="w-3.5 h-3.5" /> Floor Setup
+            </button>
+            <button
+              type="button"
+              onClick={() => setTimerSettingsOpen(true)}
+              className="px-2.5 py-1 bg-zinc-900 border border-cyan-500/30 hover:bg-cyan-500/10 rounded-lg text-[10px] font-bold uppercase tracking-wider transition flex items-center gap-1 text-cyan-300"
+            >
+              <Timer className="w-3.5 h-3.5" /> Dealer Timers
+            </button>
             <button
               type="button"
               onClick={undoTableAction}
@@ -405,6 +476,28 @@ export default function TablesView() {
         </div>
       </div>
 
+      {qrTableNumber !== null ? (
+        <TableQrModal tableNumber={qrTableNumber} onClose={() => setQrTableNumber(null)} />
+      ) : null}
+
+      {floorSetupOpen ? (
+        <FloorSetupModal
+          tables={tables}
+          initialTeams={settings.floorTeams ?? []}
+          onSave={saveFloorTeams}
+          onClose={() => setFloorSetupOpen(false)}
+        />
+      ) : null}
+
+      {timerSettingsOpen ? (
+        <DealerTimerSettingsModal
+          callTimeSeconds={settings.dealerCallTimeSeconds ?? 30}
+          playerTimeSeconds={settings.dealerPlayerTimeSeconds ?? 60}
+          onSave={saveDealerTimers}
+          onClose={() => setTimerSettingsOpen(false)}
+        />
+      ) : null}
+
       {modal.isOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-fade-in">
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative space-y-4">
@@ -440,6 +533,36 @@ export default function TablesView() {
                     className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-black uppercase rounded-xl tracking-wider transition"
                   >
                     Yes, Delete
+                  </button>
+                </>
+              ) : modal.type === "confirm_bust" ? (
+                <>
+                  <button
+                    onClick={() => setModal(prev => ({ ...prev, isOpen: false, playerIdToBust: undefined, playerNameToBust: undefined }))}
+                    className="px-4 py-2 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 text-xs font-bold uppercase rounded-xl tracking-wider transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleConfirmBustPlayer}
+                    className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-black uppercase rounded-xl tracking-wider transition"
+                  >
+                    Yes, Eliminate
+                  </button>
+                </>
+              ) : modal.type === "confirm_remove_waiting" ? (
+                <>
+                  <button
+                    onClick={() => setModal(prev => ({ ...prev, isOpen: false, playerIdToBust: undefined }))}
+                    className="px-4 py-2 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 text-xs font-bold uppercase rounded-xl tracking-wider transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleConfirmRemoveWaitingPlayer}
+                    className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-black uppercase rounded-xl tracking-wider transition"
+                  >
+                    Yes, Remove
                   </button>
                 </>
               ) : (

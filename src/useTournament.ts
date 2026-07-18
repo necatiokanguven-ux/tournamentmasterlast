@@ -59,7 +59,7 @@ export function useTournament() {
     // Tournament Settings
     updateSettings: (updates: any) => tournamentStore.updateSettings(updates),
     updateSettingsAndPayouts: (updates: any, payouts: any) => tournamentStore.updateSettingsAndPayouts(updates, payouts),
-    updateBlindStructure: (structure: any) => tournamentStore.updateBlindStructure(structure),
+    updateBlindStructure: (structure: any, source?: string) => tournamentStore.updateBlindStructure(structure, source),
     updatePayouts: (payouts: any) => tournamentStore.updatePayouts(payouts),
     
     // Utility / Logs
@@ -67,6 +67,10 @@ export function useTournament() {
     undoTableAction: () => tournamentStore.undoTableAction(),
     getTableUndoCount: () => tournamentStore.getTableUndoStackSize(),
     getWaitingListPlayers: () => tournamentStore.getWaitingListPlayers(),
+    saveFloorTeams: (teams: Parameters<typeof tournamentStore.saveFloorTeams>[0]) =>
+      tournamentStore.saveFloorTeams(teams),
+    saveDealerTimers: (callTimeSeconds: number, playerTimeSeconds: number) =>
+      tournamentStore.saveDealerTimers(callTimeSeconds, playerTimeSeconds),
     resetDatabase: () => tournamentStore.reset()
   };
 }

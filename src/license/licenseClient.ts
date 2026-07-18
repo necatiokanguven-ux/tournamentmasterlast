@@ -2,8 +2,14 @@ import { isCloudHostedApp, localApi } from "../config/api";
 import { LICENSE_API_BASE, type LocalLicenseStatus } from "./config";
 import {
   activateBrowserLicense,
+  getOrCreateBrowserMachine,
   resolveBrowserLicenseStatus,
+  saveBrowserLicense,
 } from "./browserLicense";
+import {
+  claimMachineLicense,
+  requestMachineTrial,
+} from "./pokerclupApi";
 
 export async function fetchLicenseStatus(): Promise<LocalLicenseStatus> {
   if (isCloudHostedApp()) {
@@ -68,4 +74,53 @@ export async function activateLicenseKey(licenseKey: string): Promise<LocalLicen
   }
 
   return fetchLicenseStatus();
+}
+
+async function persistLicenseKey(licenseKey: string): Promise<LocalLicenseStatus> {
+  if (isCloudHostedApp()) {
+    saveBrowserLicense(licenseKey);
+    return activateBrowserLicense(licenseKey);
+  }
+
+  const saveResponse = await fetch(localApi("/api/license/save"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ licenseKey }),
+  });
+
+  if (!saveResponse.ok) {
+    throw new Error("License received but could not save locally.");
+  }
+
+  return fetchLicenseStatus();
+}
+
+export async function provisionTrialForMachine(): Promise<LocalLicenseStatus> {
+  const machine = isCloudHostedApp()
+    ? getOrCreateBrowserMachine()
+    : await (async () => {
+        const machineResponse = await fetch(localApi("/api/license/machine"));
+        if (!machineResponse.ok) {
+          throw new Error("Could not read machine ID. Start the local server first.");
+        }
+        return (await machineResponse.json()) as { machineId: string; machineName: string | null };
+      })();
+
+  const result = await requestMachineTrial(machine.machineId, machine.machineName);
+  return persistLicenseKey(result.licenseKey);
+}
+
+export async function claimPaidLicenseForMachine(): Promise<LocalLicenseStatus> {
+  const machine = isCloudHostedApp()
+    ? getOrCreateBrowserMachine()
+    : await (async () => {
+        const machineResponse = await fetch(localApi("/api/license/machine"));
+        if (!machineResponse.ok) {
+          throw new Error("Could not read machine ID. Start the local server first.");
+        }
+        return (await machineResponse.json()) as { machineId: string; machineName: string | null };
+      })();
+
+  const result = await claimMachineLicense(machine.machineId, machine.machineName);
+  return persistLicenseKey(result.licenseKey);
 }

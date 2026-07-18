@@ -38,6 +38,18 @@ export default function PlayersView() {
     notes: ""
   });
 
+  const handleBustPlayer = (playerId: string) => {
+    const player = players.find((p) => p.id === playerId);
+    if (!player) return;
+
+    const confirmed = window.confirm(
+      `${player.firstName} ${player.lastName} — oyuncuyu silmek istediğinizden emin misiniz?`,
+    );
+    if (confirmed) {
+      bustPlayer(playerId);
+    }
+  };
+
   const statusSortOrder: Record<PlayerStatus, number> = {
     Playing: 0,
     "Re-entry": 1,
@@ -303,7 +315,7 @@ export default function PlayersView() {
                         {/* Quick Action list */}
                         {player.status === "Playing" && (
                           <button 
-                            onClick={() => bustPlayer(player.id)}
+                            onClick={() => handleBustPlayer(player.id)}
                             className="px-2 py-1 bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500 hover:text-white rounded-lg text-[9px] font-bold uppercase transition"
                             title="Eliminate player"
                           >

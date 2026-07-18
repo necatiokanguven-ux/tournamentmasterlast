@@ -74,8 +74,7 @@ export default function App() {
         <div className="bg-red-500/10 border-b border-red-500/30 px-4 py-3 text-red-200 text-sm flex items-start gap-2">
           <Lock className="w-4 h-4 mt-0.5 shrink-0 text-red-400" />
           <p>
-            Tournament Master is locked until you activate a license key. Open{" "}
-            <strong className="text-red-100">License Key</strong> from the left menu and paste your key from pokerclup.com.
+            Install the local server, open <strong className="text-red-100">License Key</strong>, sign in to PokerClup, and choose trial or a paid plan.
             {licenseStatus?.message ? ` ${licenseStatus.message}` : ""}
           </p>
         </div>
