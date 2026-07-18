@@ -15,7 +15,6 @@ export interface TournamentDatabase {
 
 export const DEFAULT_DEALER_CALL_TIME = 30;
 export const DEFAULT_DEALER_PLAYER_TIME = 60;
-export const FLOOR_CALL_COOLDOWN_MS = 30_000;
 
 export function normalizeSettings(settings: Partial<TournamentSettings> | undefined): TournamentSettings {
   const base = settings ?? ({} as TournamentSettings);

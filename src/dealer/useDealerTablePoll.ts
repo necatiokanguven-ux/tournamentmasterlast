@@ -26,6 +26,7 @@ export type DealerTableSnapshot = {
   clock: {
     timeRemaining: number;
     isRunning: boolean;
+    currentLevelIndex: number;
     currentLevel: number;
     isBreak: boolean;
     currentBlinds: string;

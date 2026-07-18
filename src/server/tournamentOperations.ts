@@ -3,7 +3,6 @@ import {
   bumpDatabaseMeta,
   findFloorTeamForTable,
   findTableByNumber,
-  FLOOR_CALL_COOLDOWN_MS,
 } from "./tournamentDatabase";
 import type { FloorCall, HistoryEvent, Player } from "../types";
 
@@ -129,7 +128,6 @@ export function createFloorCall(
     };
   }
 
-  const now = Date.now();
   const existingPending = db.floorCalls.find(
     (call) =>
       call.tableNumber === tableNumber &&
@@ -138,22 +136,6 @@ export function createFloorCall(
 
   if (existingPending) {
     return { ok: true, call: existingPending };
-  }
-
-  const recentPending = db.floorCalls.find(
-    (call) =>
-      call.tableNumber === tableNumber &&
-      call.status === "resolved" &&
-      call.resolvedAt &&
-      now - new Date(call.resolvedAt).getTime() < FLOOR_CALL_COOLDOWN_MS,
-  );
-
-  if (recentPending) {
-    return {
-      ok: false,
-      error: "FLOOR_CALL_COOLDOWN",
-      message: "Floor was recently called for this table. Please wait.",
-    };
   }
 
   const call: FloorCall = {

@@ -130,11 +130,24 @@ class Store {
     const response = await fetch(localApi("/api/save"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(snapshot),
+      body: JSON.stringify({
+        ...snapshot,
+        meta: { lastModified: this.lastServerModified },
+      }),
     });
     if (response.ok) {
       const data = await response.json();
       this.lastServerModified = data.lastModified ?? this.lastServerModified;
+
+      if (data.data?.players) {
+        const keepLocalClock = this.state.clock.isRunning;
+        const localClock = { ...this.state.clock };
+        this.applyServerPayload(data.data);
+        if (keepLocalClock) {
+          this.state.clock = localClock;
+        }
+      }
+
       this.sessionDirty = false;
     }
   }
@@ -225,10 +238,6 @@ class Store {
   }
 
   public async syncFromServer() {
-    if (this.sessionDirty) {
-      return;
-    }
-
     try {
       const metaRes = await fetch(localApi("/api/data/meta"));
       if (!metaRes.ok) return;
@@ -243,8 +252,19 @@ class Store {
       const data = await res.json();
       if (!data?.players) return;
 
+      const keepLocalClock = this.state.clock.isRunning;
+      const localClock = { ...this.state.clock };
+
       this.applyServerPayload(data);
-      this.sessionDirty = false;
+
+      if (keepLocalClock) {
+        this.state.clock = localClock;
+      }
+
+      this.lastServerModified = remoteModified;
+      if (!keepLocalClock) {
+        this.sessionDirty = false;
+      }
     } catch (error) {
       console.warn("Failed to sync tournament data from server", error);
     }

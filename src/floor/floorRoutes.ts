@@ -11,6 +11,7 @@ import {
   getActiveFloorCallsForTeam,
   resolveFloorCall,
 } from "../server/tournamentOperations";
+import { buildSeatSnapshot } from "../server/tableSnapshot";
 import { buildLocalUrl } from "../server/localNetwork";
 
 type DbAccessor = () => TournamentDatabase;
@@ -62,7 +63,50 @@ export function createFloorRouter(port: number, getDb: DbAccessor, saveDb: DbSav
       version: db.meta.lastModified,
       teamId: team.id,
       teamName: team.name,
+      tableNumbers: team.tableNumbers,
       calls: getActiveFloorCallsForTeam(db, teamId),
+    });
+  });
+
+  router.get("/tables", (req, res) => {
+    const teamId = String(req.query.teamId ?? "");
+    if (!teamId) {
+      res.status(400).json({ error: "TEAM_ID_REQUIRED" });
+      return;
+    }
+
+    const db = getDb();
+    const team = (db.settings.floorTeams ?? []).find((entry) => entry.id === teamId);
+    if (!team) {
+      res.status(404).json({ error: "TEAM_NOT_FOUND" });
+      return;
+    }
+
+    const tables = team.tableNumbers
+      .map((tableNumber) => {
+        const snapshot = buildSeatSnapshot(db, tableNumber);
+        if (!snapshot) return null;
+
+        return {
+          tableNumber: snapshot.table.number,
+          tableId: snapshot.table.id,
+          occupants: snapshot.seats.filter((seat) => !seat.isOpen).length,
+          seats: snapshot.seats.map((seat) => ({
+            seatNumber: seat.seatNumber,
+            displayName: seat.displayName,
+            isOpen: seat.isOpen,
+            status: seat.status,
+          })),
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+      .sort((a, b) => a.tableNumber - b.tableNumber);
+
+    res.json({
+      version: db.meta.lastModified,
+      teamId: team.id,
+      teamName: team.name,
+      tables,
     });
   });
 

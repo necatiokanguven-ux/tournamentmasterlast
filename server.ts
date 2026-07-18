@@ -328,13 +328,27 @@ app.get("/api/data/meta", licenseGuard, (_req, res) => {
 });
 
 app.post("/api/save", licenseGuard, (req, res) => {
-  saveDatabase(
-    normalizeDatabase({
-      ...req.body,
-      floorCalls: Array.isArray(req.body?.floorCalls) ? req.body.floorCalls : db.floorCalls,
-    }),
-  );
-  res.json({ success: true, message: "Database saved successfully", lastModified: db.meta.lastModified });
+  const incomingClientModified = Number(req.body?.meta?.lastModified) || 0;
+  const incoming = normalizeDatabase({
+    ...req.body,
+    floorCalls: Array.isArray(req.body?.floorCalls) ? req.body.floorCalls : db.floorCalls,
+  });
+
+  if (db.meta.lastModified > incomingClientModified) {
+    incoming.players = db.players;
+    incoming.tables = db.tables;
+    incoming.history = db.history;
+    incoming.floorCalls = db.floorCalls;
+    incoming.payouts = db.payouts;
+  }
+
+  saveDatabase(incoming);
+  res.json({
+    success: true,
+    message: "Database saved successfully",
+    lastModified: db.meta.lastModified,
+    data: db,
+  });
 });
 
 app.post("/api/reset", licenseGuard, (req, res) => {

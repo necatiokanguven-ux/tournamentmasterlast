@@ -288,7 +288,9 @@ export function buildTrackingLiveState(input: BuildLiveStateInput): TrackingLive
     tournamentName: settings.name,
     currency,
     currencySymbol,
-    currentLevel: activeLevel?.isBreak ? currentStandardLevel : (activeLevel?.level ?? currentStandardLevel),
+  currentLevel: activeLevel?.isBreak
+    ? currentStandardLevel
+    : (activeLevel?.level && activeLevel.level > 0 ? activeLevel.level : currentStandardLevel),
     isBreak: Boolean(activeLevel?.isBreak),
     currentBlinds: activeLevel ? formatBlinds(activeLevel) : "-",
     nextBlinds: nextLevel ? formatBlinds(nextLevel) : null,

@@ -3,8 +3,8 @@ import { buildTrackingLiveState } from "../tracking/liveState";
 import type { TournamentDatabase } from "../server/tournamentDatabase";
 import { findTableByNumber } from "../server/tournamentDatabase";
 import { bustPlayerOnTable, createFloorCall } from "../server/tournamentOperations";
+import { buildSeatSnapshot } from "../server/tableSnapshot";
 import { buildLocalUrl } from "../server/localNetwork";
-import type { Player } from "../types";
 
 type DbAccessor = () => TournamentDatabase;
 type DbSaver = (db: TournamentDatabase) => void;
@@ -12,56 +12,6 @@ type DbSaver = (db: TournamentDatabase) => void;
 function parseTableNumber(raw: string): number | null {
   const value = Number.parseInt(raw, 10);
   return Number.isFinite(value) && value > 0 ? value : null;
-}
-
-function buildSeatSnapshot(db: TournamentDatabase, tableNumber: number) {
-  const table = findTableByNumber(db, tableNumber);
-  if (!table) return null;
-
-  const seats = table.seats.map((playerId, seatIndex) => {
-    if (!playerId) {
-      return {
-        seatNumber: seatIndex + 1,
-        seatIndex,
-        playerId: null,
-        firstName: null,
-        lastName: null,
-        displayName: null,
-        country: null,
-        status: null as Player["status"] | null,
-        isOpen: true,
-      };
-    }
-
-    const player = db.players.find((entry) => entry.id === playerId);
-    if (!player) {
-      return {
-        seatNumber: seatIndex + 1,
-        seatIndex,
-        playerId: null,
-        firstName: null,
-        lastName: null,
-        displayName: null,
-        country: null,
-        status: null,
-        isOpen: true,
-      };
-    }
-
-    return {
-      seatNumber: seatIndex + 1,
-      seatIndex,
-      playerId: player.id,
-      firstName: player.firstName,
-      lastName: player.lastName,
-      displayName: `${player.firstName} ${player.lastName}`.trim(),
-      country: player.country,
-      status: player.status,
-      isOpen: false,
-    };
-  });
-
-  return { table, seats };
 }
 
 export function createDealerRouter(port: number, getDb: DbAccessor, saveDb: DbSaver) {
@@ -135,6 +85,7 @@ export function createDealerRouter(port: number, getDb: DbAccessor, saveDb: DbSa
       clock: {
         timeRemaining: live.timeRemaining,
         isRunning: live.isRunning,
+        currentLevelIndex: db.clock.currentLevelIndex,
         currentLevel: live.currentLevel,
         isBreak: live.isBreak,
         currentBlinds: live.currentBlinds,
@@ -175,7 +126,7 @@ export function createDealerRouter(port: number, getDb: DbAccessor, saveDb: DbSa
     const result = createFloorCall(db, tableNumber);
 
     if (result.ok === false) {
-      res.status(result.error === "FLOOR_CALL_COOLDOWN" ? 429 : 400).json(result);
+      res.status(400).json(result);
       return;
     }
 
