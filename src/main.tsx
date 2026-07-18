@@ -6,7 +6,18 @@ import DealerShell from './dealer/DealerShell.tsx';
 import FloorView from './floor/FloorView.tsx';
 import './index.css';
 
-const pathname = window.location.pathname;
+function getAppPathname(): string {
+  const { pathname } = window.location;
+  if (pathname === '/app' || pathname === '/app/') {
+    return '/';
+  }
+  if (pathname.startsWith('/app/')) {
+    return pathname.slice(4);
+  }
+  return pathname;
+}
+
+const pathname = getAppPathname();
 
 function RootApp() {
   if (pathname === '/track' || pathname.startsWith('/track/')) {
