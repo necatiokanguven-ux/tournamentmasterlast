@@ -1,19 +1,45 @@
 import { useState } from "react";
 import { Timer, X } from "lucide-react";
+import type { DealerTimerModeSetting } from "../types";
 
 type DealerTimerSettingsModalProps = {
+  timerMode: DealerTimerModeSetting;
   callTimeSeconds: number;
   playerTimeSeconds: number;
-  onSave: (callTimeSeconds: number, playerTimeSeconds: number) => Promise<void>;
+  onSave: (
+    timerMode: DealerTimerModeSetting,
+    callTimeSeconds: number,
+    playerTimeSeconds: number,
+  ) => Promise<void>;
   onClose: () => void;
 };
 
+const MODE_OPTIONS: { value: DealerTimerModeSetting; label: string; description: string }[] = [
+  {
+    value: "none",
+    label: "None",
+    description: "Dealer tablets use Call Floor only — no countdown timer.",
+  },
+  {
+    value: "call_time",
+    label: "Call Time",
+    description: "Show Call Time only. Synced instantly between dealer devices.",
+  },
+  {
+    value: "player_time",
+    label: "Player Time",
+    description: "Show Player Time only. Synced via polling.",
+  },
+];
+
 export default function DealerTimerSettingsModal({
+  timerMode,
   callTimeSeconds,
   playerTimeSeconds,
   onSave,
   onClose,
 }: DealerTimerSettingsModalProps) {
+  const [mode, setMode] = useState<DealerTimerModeSetting>(timerMode);
   const [callTime, setCallTime] = useState(callTimeSeconds);
   const [playerTime, setPlayerTime] = useState(playerTimeSeconds);
   const [error, setError] = useState<string | null>(null);
@@ -23,7 +49,7 @@ export default function DealerTimerSettingsModal({
     setSaving(true);
     setError(null);
     try {
-      await onSave(callTime, playerTime);
+      await onSave(mode, callTime, playerTime);
       onClose();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Failed to save timer settings.");
@@ -47,29 +73,60 @@ export default function DealerTimerSettingsModal({
           These defaults apply to all dealer tablets. Tablets cannot change them locally.
         </p>
 
-        <label className="block mt-5">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Call Time (seconds)</span>
-          <input
-            type="number"
-            min={10}
-            max={120}
-            value={callTime}
-            onChange={(event) => setCallTime(Number.parseInt(event.target.value, 10) || 30)}
-            className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-3 text-sm"
-          />
-        </label>
+        <fieldset className="mt-5 space-y-2">
+          <legend className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Timer Mode</legend>
+          {MODE_OPTIONS.map((option) => (
+            <label
+              key={option.value}
+              className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-3 transition ${
+                mode === option.value
+                  ? "border-cyan-500/60 bg-cyan-500/10"
+                  : "border-zinc-800 bg-zinc-950 hover:border-zinc-700"
+              }`}
+            >
+              <input
+                type="radio"
+                name="dealerTimerMode"
+                value={option.value}
+                checked={mode === option.value}
+                onChange={() => setMode(option.value)}
+                className="mt-1 accent-cyan-500"
+              />
+              <span>
+                <span className="block text-sm font-bold text-zinc-100">{option.label}</span>
+                <span className="mt-0.5 block text-xs text-zinc-500">{option.description}</span>
+              </span>
+            </label>
+          ))}
+        </fieldset>
 
-        <label className="block mt-4">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Player Time (seconds)</span>
-          <input
-            type="number"
-            min={15}
-            max={180}
-            value={playerTime}
-            onChange={(event) => setPlayerTime(Number.parseInt(event.target.value, 10) || 60)}
-            className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-3 text-sm"
-          />
-        </label>
+        {mode === "call_time" ? (
+          <label className="block mt-4">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Call Time (seconds)</span>
+            <input
+              type="number"
+              min={10}
+              max={120}
+              value={callTime}
+              onChange={(event) => setCallTime(Number.parseInt(event.target.value, 10) || 30)}
+              className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-3 text-sm"
+            />
+          </label>
+        ) : null}
+
+        {mode === "player_time" ? (
+          <label className="block mt-4">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Player Time (seconds)</span>
+            <input
+              type="number"
+              min={15}
+              max={180}
+              value={playerTime}
+              onChange={(event) => setPlayerTime(Number.parseInt(event.target.value, 10) || 60)}
+              className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-3 text-sm"
+            />
+          </label>
+        ) : null}
 
         {error ? <p className="mt-4 text-sm text-red-400">{error}</p> : null}
 

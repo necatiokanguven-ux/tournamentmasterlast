@@ -4,6 +4,7 @@ import {
   findFloorTeamForTable,
   findTableByNumber,
 } from "./tournamentDatabase";
+import { buildSeatSnapshot } from "./tableSnapshot";
 import type { FloorCall, HistoryEvent, Player } from "../types";
 
 function isPlayerSeatedOnTables(playerId: string, db: TournamentDatabase): boolean {
@@ -106,8 +107,44 @@ export function bustPlayerOnTable(
 
   reconcileTableSeats(db);
   addHistoryEvent(db, "bust", `${playerName} eliminated`, playerId, playerName);
+  createPlayerEliminatedFloorCall(db, tableNumber, playerId, playerName);
   bumpDatabaseMeta(db);
   return { ok: true };
+}
+
+export function createPlayerEliminatedFloorCall(
+  db: TournamentDatabase,
+  tableNumber: number,
+  playerId: string,
+  playerName: string,
+): FloorCall | null {
+  const table = findTableByNumber(db, tableNumber);
+  if (!table) {
+    return null;
+  }
+
+  const team = findFloorTeamForTable(db, tableNumber);
+  if (!team) {
+    return null;
+  }
+
+  const call: FloorCall = {
+    id: `fc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    tableNumber,
+    tableId: table.id,
+    teamId: team.id,
+    kind: "player_eliminated",
+    playerId,
+    playerName,
+    status: "pending",
+    createdAt: new Date().toISOString(),
+    acknowledgedAt: null,
+    acknowledgedBy: null,
+    resolvedAt: null,
+  };
+
+  db.floorCalls.unshift(call);
+  return call;
 }
 
 export function createFloorCall(
@@ -143,6 +180,9 @@ export function createFloorCall(
     tableNumber,
     tableId: table.id,
     teamId: team.id,
+    kind: "floor_request",
+    playerId: null,
+    playerName: null,
     status: "pending",
     createdAt: new Date().toISOString(),
     acknowledgedAt: null,
@@ -217,4 +257,121 @@ export function getActiveFloorCallsForTeam(db: TournamentDatabase, teamId: strin
       call.teamId === teamId &&
       (call.status === "pending" || call.status === "acknowledged"),
   );
+}
+
+export function getMoveTargetTables(db: TournamentDatabase) {
+  return db.tables
+    .map((table) => {
+      const snapshot = buildSeatSnapshot(db, table.number);
+      if (!snapshot) return null;
+
+      const emptySeats = snapshot.seats
+        .filter((seat) => seat.isOpen)
+        .map((seat) => ({
+          seatNumber: seat.seatNumber,
+          seatIndex: seat.seatIndex,
+        }));
+
+      return {
+        tableNumber: table.number,
+        tableId: table.id,
+        occupants: snapshot.seats.filter((seat) => !seat.isOpen).length,
+        emptySeats,
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((a, b) => a.tableNumber - b.tableNumber);
+}
+
+function isPlayerOnTeamTables(db: TournamentDatabase, teamId: string, playerId: string): boolean {
+  const team = (db.settings.floorTeams ?? []).find((entry) => entry.id === teamId);
+  if (!team) return false;
+
+  for (const tableNumber of team.tableNumbers) {
+    const table = findTableByNumber(db, tableNumber);
+    if (table?.seats.includes(playerId)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function movePlayerToSeat(
+  db: TournamentDatabase,
+  teamId: string,
+  playerId: string,
+  targetTableNumber: number,
+  targetSeatIndex: number,
+): { ok: true } | { ok: false; error: string; message?: string } {
+  const team = (db.settings.floorTeams ?? []).find((entry) => entry.id === teamId);
+  if (!team) {
+    return { ok: false, error: "TEAM_NOT_FOUND" };
+  }
+
+  if (!isPlayerOnTeamTables(db, teamId, playerId)) {
+    return {
+      ok: false,
+      error: "PLAYER_NOT_ON_ASSIGNED_TABLE",
+      message: "Player is not seated on a table assigned to this floor team.",
+    };
+  }
+
+  const player = db.players.find((entry) => entry.id === playerId);
+  if (!player || player.status === "Eliminated") {
+    return { ok: false, error: "PLAYER_NOT_ELIGIBLE" };
+  }
+
+  const targetTable = findTableByNumber(db, targetTableNumber);
+  if (!targetTable) {
+    return { ok: false, error: "TABLE_NOT_FOUND" };
+  }
+
+  if (targetSeatIndex < 0 || targetSeatIndex >= targetTable.seats.length) {
+    return { ok: false, error: "INVALID_SEAT" };
+  }
+
+  if (targetTable.seats[targetSeatIndex]) {
+    return { ok: false, error: "SEAT_OCCUPIED", message: "Selected seat is not empty." };
+  }
+
+  const playerName = `${player.firstName} ${player.lastName}`.trim();
+
+  db.tables = db.tables.map((table) => ({
+    ...table,
+    seats: table.seats.map((seatId) => (seatId === playerId ? null : seatId)),
+  }));
+
+  db.tables = db.tables.map((table) =>
+    table.id === targetTable.id
+      ? {
+          ...table,
+          seats: table.seats.map((seatId, index) =>
+            index === targetSeatIndex ? playerId : seatId,
+          ),
+        }
+      : table,
+  );
+
+  db.players = db.players.map((entry) =>
+    entry.id === playerId
+      ? {
+          ...entry,
+          tableId: targetTable.id,
+          seatIndex: targetSeatIndex,
+          status: "Playing" as Player["status"],
+        }
+      : entry,
+  );
+
+  reconcileTableSeats(db);
+  addHistoryEvent(
+    db,
+    "move",
+    `Moved ${playerName} to Table ${targetTable.number}, Seat ${targetSeatIndex + 1}`,
+    playerId,
+    playerName,
+  );
+  bumpDatabaseMeta(db);
+  return { ok: true };
 }

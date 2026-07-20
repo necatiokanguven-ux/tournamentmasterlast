@@ -62,4 +62,22 @@ export function localApi(path: string): string {
   return base ? `${base}${normalizedPath}` : normalizedPath;
 }
 
+export function localWsApi(path: string): string {
+  const httpUrl = localApi(path);
+  if (httpUrl.startsWith("http://")) {
+    return httpUrl.replace(/^http:\/\//, "ws://");
+  }
+  if (httpUrl.startsWith("https://")) {
+    return httpUrl.replace(/^https:\/\//, "wss://");
+  }
+
+  if (typeof window === "undefined") {
+    return path;
+  }
+
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${protocol}//${window.location.host}${normalizedPath}`;
+}
+
 export const LOCAL_SERVER_PORT = 3000;

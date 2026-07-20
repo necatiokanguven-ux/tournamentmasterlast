@@ -1,0 +1,31 @@
+#!/bin/bash
+# Tournament Master — macOS .app launcher (opens Terminal + server)
+
+APP_SERVER="$(cd "$(dirname "$0")/../Resources/server" && pwd)"
+DATA_DIR="$APP_SERVER/data"
+mkdir -p "$DATA_DIR"
+
+if ! command -v node >/dev/null 2>&1; then
+  osascript -e 'display alert "Node.js required" message "Install Node.js 18+ from https://nodejs.org/ then try again." as critical'
+  exit 1
+fi
+
+if lsof -Pi :3000 -sTCP:LISTEN -t >/dev/null 2>&1; then
+  TS="$(python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null || date +%s000)"
+  open "http://localhost:3000/#tm=${TS}"
+  exit 0
+fi
+
+if [ ! -f "$APP_SERVER/dist/server.cjs" ]; then
+  osascript -e 'display alert "Tournament Master" message "Server files are missing. Re-install TourMasterMac.zip." as critical'
+  exit 1
+fi
+
+RUN_LINE="cd '$APP_SERVER' && export NODE_ENV=production TM_AUTO_OPEN_BROWSER=1 TM_DATA_DIR='$DATA_DIR' && echo 'Tournament Master — keep this window open during the tournament.' && echo 'Data: $DATA_DIR' && node dist/server.cjs"
+
+osascript <<APPLESCRIPT
+tell application "Terminal"
+  activate
+  do script "$RUN_LINE"
+end tell
+APPLESCRIPT

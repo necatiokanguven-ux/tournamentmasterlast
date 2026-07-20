@@ -22,6 +22,7 @@ export interface Player {
   country: string;
   phone: string;
   notes: string;
+  birthDate?: string | null;
   status: PlayerStatus;
   chips: number;
   tableId: string | null;
@@ -36,9 +37,12 @@ export interface Player {
 export interface Table {
   id: string;
   number: number;
-  dealerSeatIndex: number; // 0 to 9
-  seats: (string | null)[]; // array of playerIds of length 10
+  dealerSeatIndex: number; // 0 to 8
+  seats: (string | null)[]; // player seats 1–9 (length 9)
 }
+
+/** Standard poker table capacity (seats 1–9). */
+export const MAX_TABLE_SEATS = 9;
 
 export type TournamentType = 
   | 'Freezeout' 
@@ -65,19 +69,31 @@ export interface FloorTeam {
   tableNumbers: number[];
 }
 
+export interface DealerZone {
+  id: string;
+  name: string;
+  tableNumbers: number[];
+}
+
 export type FloorCallStatus = 'pending' | 'acknowledged' | 'resolved';
+export type FloorCallKind = 'floor_request' | 'player_eliminated';
 
 export interface FloorCall {
   id: string;
   tableNumber: number;
   tableId: string;
   teamId: string;
+  kind?: FloorCallKind;
+  playerId?: string | null;
+  playerName?: string | null;
   status: FloorCallStatus;
   createdAt: string;
   acknowledgedAt: string | null;
   acknowledgedBy: string | null;
   resolvedAt: string | null;
 }
+
+export type DealerTimerModeSetting = "none" | "call_time" | "player_time";
 
 export interface TournamentSettings {
   id: string;
@@ -103,7 +119,11 @@ export interface TournamentSettings {
   currentDay?: number;
   dealerCallTimeSeconds?: number;
   dealerPlayerTimeSeconds?: number;
+  /** Operator-selected timer feature: none, call time only, or player time only. */
+  dealerTimerMode?: DealerTimerModeSetting;
   floorTeams?: FloorTeam[];
+  /** Phase 6 — dealer zones (active only when DEALER_ZONES=true). */
+  dealerZones?: DealerZone[];
 }
 
 export interface ClockState {
@@ -113,6 +133,10 @@ export interface ClockState {
   elapsedTime: number; // in seconds
   soundEnabled: boolean;
   fullscreen: boolean;
+  /** Wall-clock ms when timeRemaining was last synced to the server. */
+  syncedAtMs?: number | null;
+  /** ISO timestamp when the tournament clock was first started. */
+  tournamentStartedAt?: string | null;
 }
 
 export interface HistoryEvent {

@@ -13,3 +13,8 @@ license-entitlement.json
 machine.json
 db.json
 release/
+
+# Accidental local artifacts
+/npm
+/tsx
+/react-example@0.0.0

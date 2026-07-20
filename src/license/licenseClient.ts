@@ -1,5 +1,5 @@
 import { isCloudHostedApp, localApi } from "../config/api";
-import { LICENSE_API_BASE, type LocalLicenseStatus } from "./config";
+import type { LocalLicenseStatus } from "./config";
 import {
   activateBrowserLicense,
   getOrCreateBrowserMachine,
@@ -34,24 +34,10 @@ export async function activateLicenseKey(licenseKey: string): Promise<LocalLicen
     return activateBrowserLicense(trimmedKey);
   }
 
-  const machineResponse = await fetch(localApi("/api/license/machine"));
-  if (!machineResponse.ok) {
-    throw new Error("Could not read machine ID from local server.");
-  }
-
-  const machineData = (await machineResponse.json()) as {
-    machineId: string;
-    machineName: string | null;
-  };
-
-  const activateResponse = await fetch(`${LICENSE_API_BASE}/activate`, {
+  const activateResponse = await fetch(localApi("/api/license/activate"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      licenseKey: trimmedKey,
-      machineId: machineData.machineId,
-      machineName: machineData.machineName,
-    }),
+    body: JSON.stringify({ licenseKey: trimmedKey }),
   });
 
   const activateData = (await activateResponse.json()) as {
@@ -61,16 +47,6 @@ export async function activateLicenseKey(licenseKey: string): Promise<LocalLicen
 
   if (!activateResponse.ok || !activateData.valid) {
     throw new Error(activateData.message || "License activation failed.");
-  }
-
-  const saveResponse = await fetch(localApi("/api/license/save"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ licenseKey: trimmedKey }),
-  });
-
-  if (!saveResponse.ok) {
-    throw new Error("License activated remotely but could not save locally.");
   }
 
   return fetchLicenseStatus();

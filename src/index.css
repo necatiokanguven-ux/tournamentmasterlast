@@ -82,6 +82,75 @@ body, input, button, select, textarea {
   overscroll-behavior: none;
 }
 
+html.venue-display,
+body.venue-display,
+html.venue-display-kiosk,
+body.venue-display-kiosk {
+  overflow: hidden;
+  background: #09090b;
+  min-height: 100dvh;
+  min-height: 100svh;
+  overscroll-behavior: none;
+}
+
+.venue-display-root {
+  overflow: hidden;
+  min-height: 100dvh;
+  min-height: 100svh;
+  height: 100dvh;
+  height: 100svh;
+}
+
+html.venue-display #root,
+html.venue-display-kiosk #root {
+  height: 100dvh;
+  height: 100svh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+html.venue-display .clock-fullscreen-viewport,
+html.venue-display-kiosk .clock-fullscreen-viewport {
+  height: 100dvh;
+  height: 100svh;
+}
+
+html.venue-display-kiosk:fullscreen,
+html.venue-display-kiosk:-webkit-full-screen,
+body.venue-display-kiosk:fullscreen,
+body.venue-display-kiosk:-webkit-full-screen {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #09090b;
+}
+
+@media (display-mode: standalone) {
+  html.venue-display,
+  body.venue-display,
+  html.venue-display-kiosk,
+  body.venue-display-kiosk,
+  .venue-display-root {
+    height: 100vh;
+    min-height: 100vh;
+  }
+}
+
+.venue-fullscreen-hint {
+  animation: venue-hint-fade 12s ease forwards;
+}
+
+@keyframes venue-hint-fade {
+  0%,
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
 /* Final table clock golden glow + slow falling money/chips */
 @keyframes final-table-object-fall {
   0% {
@@ -221,4 +290,25 @@ body, input, button, select, textarea {
   .print\:p-0 {
     padding: 0 !important;
   }
+}
+
+html.dealer-kiosk,
+body.dealer-kiosk {
+  min-height: 100dvh;
+  min-height: 100svh;
+  background-color: #0b0b0b;
+  overscroll-behavior: none;
+}
+
+body.dealer-kiosk {
+  padding:
+    env(safe-area-inset-top, 0px)
+    env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px)
+    env(safe-area-inset-left, 0px);
+}
+
+body.dealer-kiosk #root {
+  min-height: 100dvh;
+  min-height: 100svh;
 }

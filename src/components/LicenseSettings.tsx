@@ -4,6 +4,7 @@ import { isCloudHostedApp } from "../config/api";
 import type { LocalLicenseStatus } from "../license/config";
 import { activateLicenseKey, claimPaidLicenseForMachine, fetchLicenseStatus } from "../license/licenseClient";
 import LicenseUpgradeButtons from "./LicenseUpgradeButtons";
+import { getActiveVenuePackageId, getVenuePackageTier } from "../dealerRotation/venuePackageTiers";
 
 type LicenseSettingsProps = {
   variant?: "embedded" | "page";
@@ -77,6 +78,7 @@ export default function LicenseSettings({ variant = "embedded" }: LicenseSetting
 
   const statusColor = status?.valid ? "text-emerald-400" : "text-amber-400";
   const StatusIcon = status?.valid ? ShieldCheck : ShieldAlert;
+  const packageLabel = getVenuePackageTier(getActiveVenuePackageId()).name;
 
   return (
     <div
@@ -113,7 +115,19 @@ export default function LicenseSettings({ variant = "embedded" }: LicenseSetting
             <div className={`mb-4 flex items-start gap-2 text-sm ${statusColor}`}>
               <StatusIcon className="w-4 h-4 mt-0.5 shrink-0" />
               <div>
-                <p className="font-bold">{status.valid ? "License active" : "License required"}</p>
+                <p className="font-bold">
+                  {status.valid ? (
+                    <>
+                      License active
+                      <span className="mx-2" aria-hidden="true">
+                        ·
+                      </span>
+                      Package {packageLabel}
+                    </>
+                  ) : (
+                    "License required"
+                  )}
+                </p>
                 <p className="text-zinc-400 text-xs mt-1">{status.message}</p>
                 {status.type && (
                   <p className="text-zinc-500 text-xs mt-1">

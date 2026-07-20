@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import { useTournament } from "../useTournament";
 import { Plus, Edit3, Trash2, Search, Filter, Download, Upload, UserPlus, FileDown, Eye, Check, X } from "lucide-react";
 import { Player, PlayerStatus } from "../types";
+import { IdScanPanel } from "./IdScanPanel";
+import type { IdScanFields } from "../idScan/types";
 
 export default function PlayersView() {
   const {
@@ -34,16 +36,27 @@ export default function PlayersView() {
     lastName: "",
     nickname: "",
     country: "Turkey",
+    birthDate: "",
     phone: "",
     notes: ""
   });
+
+  const handleIdScanResult = useCallback((fields: IdScanFields) => {
+    setFormState((prev) => ({
+      ...prev,
+      firstName: fields.firstName,
+      lastName: fields.lastName,
+      birthDate: fields.birthDate ?? "",
+      country: fields.country ?? prev.country,
+    }));
+  }, []);
 
   const handleBustPlayer = (playerId: string) => {
     const player = players.find((p) => p.id === playerId);
     if (!player) return;
 
     const confirmed = window.confirm(
-      `${player.firstName} ${player.lastName} — oyuncuyu silmek istediğinizden emin misiniz?`,
+      `${player.firstName} ${player.lastName} — are you sure you want to delete this player?`,
     );
     if (confirmed) {
       bustPlayer(playerId);
@@ -90,6 +103,7 @@ export default function PlayersView() {
       lastName: "",
       nickname: "",
       country: "Turkey",
+      birthDate: "",
       phone: "",
       notes: ""
     });
@@ -103,6 +117,7 @@ export default function PlayersView() {
       lastName: player.lastName,
       nickname: player.nickname,
       country: player.country,
+      birthDate: player.birthDate ?? "",
       phone: player.phone,
       notes: player.notes
     });
@@ -116,10 +131,15 @@ export default function PlayersView() {
       return;
     }
 
+    const payload = {
+      ...formState,
+      birthDate: formState.birthDate.trim() || null,
+    };
+
     if (editingPlayerId) {
-      updatePlayer(editingPlayerId, formState);
+      updatePlayer(editingPlayerId, payload);
     } else {
-      registerPlayer(formState);
+      registerPlayer(payload);
     }
     
     setShowAddModal(false);
@@ -374,10 +394,10 @@ export default function PlayersView() {
 
       {/* Registration & Edit Form Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
           <form 
             onSubmit={handleFormSubmit}
-            className="bg-zinc-900 rounded-2xl border border-zinc-800 p-6 max-w-md w-full space-y-4"
+            className="bg-zinc-900 rounded-2xl border border-zinc-800 p-6 max-w-3xl w-full space-y-4 my-4"
           >
             <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
               <h3 className="text-md font-black uppercase text-zinc-100 tracking-wider flex items-center gap-1.5">
@@ -393,7 +413,11 @@ export default function PlayersView() {
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            {!editingPlayerId && (
+              <IdScanPanel active={showAddModal && !editingPlayerId} onResult={handleIdScanResult} />
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">First Name</label>
                 <input 
@@ -437,14 +461,25 @@ export default function PlayersView() {
               </div>
             </div>
 
-            <div>
-              <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">Phone Number</label>
-              <input 
-                type="text" 
-                value={formState.phone} 
-                onChange={(e) => handleInputChange("phone", e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500 font-mono"
-              />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">Birth Date</label>
+                <input 
+                  type="date" 
+                  value={formState.birthDate} 
+                  onChange={(e) => handleInputChange("birthDate", e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+              <div>
+                <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">Phone Number</label>
+                <input 
+                  type="text" 
+                  value={formState.phone} 
+                  onChange={(e) => handleInputChange("phone", e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500 font-mono"
+                />
+              </div>
             </div>
 
             <div>

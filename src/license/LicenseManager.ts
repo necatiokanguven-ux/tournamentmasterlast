@@ -1,14 +1,15 @@
 import crypto from "crypto";
 import fs from "fs";
-import path from "path";
 import {
   getOrCreateMachineRecord,
   readLicenseRecord,
+  resolveEntitlementFilePath,
+  resolveLicensedMachineRecord,
   verifyRemoteLicense,
   type ResolvedLicenseStatus,
 } from "./licenseCore";
 
-const ENTITLEMENT_FILE = path.join(process.cwd(), "license-entitlement.json");
+const ENTITLEMENT_FILE = resolveEntitlementFilePath();
 const RAM_CACHE_TTL_MS = 60_000;
 const OFFLINE_GRACE_MS = 24 * 60 * 60 * 1000;
 const ENTITLEMENT_HMAC_SALT = "tournament-master-offline-entitlement-v1";
@@ -244,11 +245,21 @@ class LicenseManager {
     machine: ReturnType<typeof getOrCreateMachineRecord>,
   ): Promise<ResolvedLicenseStatus> {
     try {
-      const remote = await verifyRemoteLicense(licenseKey, machine.machineId);
+      let activeMachine = machine;
+      let remote = await verifyRemoteLicense(licenseKey, activeMachine.machineId);
+
+      if (!remote.valid) {
+        const resolved = await resolveLicensedMachineRecord(licenseKey);
+        if (resolved.remote.valid) {
+          activeMachine = resolved.machine;
+          remote = resolved.remote;
+        }
+      }
+
       const status: ResolvedLicenseStatus = {
         licenseKey,
-        machineId: machine.machineId,
-        machineName: machine.machineName,
+        machineId: activeMachine.machineId,
+        machineName: activeMachine.machineName,
         valid: Boolean(remote.valid),
         message: remote.message || (remote.valid ? "License is valid." : "License is invalid."),
         type: remote.type,
@@ -261,7 +272,7 @@ class LicenseManager {
         clearOfflineEntitlement();
       }
 
-      this.setMemoryCache(licenseKey, machine.machineId, status);
+      this.setMemoryCache(licenseKey, activeMachine.machineId, status);
       return status;
     } catch {
       const entitlement = readJsonFile<OfflineEntitlement>(ENTITLEMENT_FILE);

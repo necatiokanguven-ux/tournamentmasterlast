@@ -1,5 +1,6 @@
 export const POKERCLUP_AUTH_API = "https://api.pokerclup.com/api/auth";
 export const POKERCLUP_LICENSE_API = "https://api.pokerclup.com/api/licenses";
+export const POKERCLUP_ID_SCAN_API = "https://api.pokerclup.com/api/id-scan";
 export const POKERCLUP_WEB_BASE = "https://pokerclup.com";
 
 const TOKEN_KEY = "tm-pokerclup-token";

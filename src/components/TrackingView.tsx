@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Loader2, WifiOff } from "lucide-react";
 import PlayerSearchPanel from "./PlayerSearchPanel";
 import PlayerSeatCard from "./PlayerSeatCard";
@@ -11,10 +11,9 @@ import type {
 import { useTrackingI18n } from "../tracking/useTrackingI18n";
 import { areTrackingPlayersEqual } from "../tracking/playerListUtils";
 import { isTrackingEliminatedPlayer } from "../tracking/playerStatus";
+import { TRACKING_PLAYERS_POLL_MS } from "../tracking/trackingPollConfig";
 
 type ConnectionState = "checking" | "connected" | "error";
-
-const PLAYERS_POLL_INTERVAL_MS = 5000;
 
 export default function TrackingView() {
   const { locale, t } = useTrackingI18n();
@@ -23,6 +22,7 @@ export default function TrackingView() {
   const [tournamentName, setTournamentName] = useState("Tournament");
   const [selectedPlayer, setSelectedPlayer] = useState<TrackingPlayerSearchItem | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const playersEtagRef = useRef<string | null>(null);
 
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -35,13 +35,32 @@ export default function TrackingView() {
     }
 
     try {
+      const playersHeaders: HeadersInit = {};
+      if (playersEtagRef.current) {
+        playersHeaders["If-None-Match"] = playersEtagRef.current;
+      }
+
       const [healthResponse, playersResponse] = await Promise.all([
         fetch("/api/tracking/health"),
-        fetch("/api/tracking/players"),
+        fetch("/api/tracking/players", { headers: playersHeaders }),
       ]);
 
-      if (!healthResponse.ok || !playersResponse.ok) {
+      if (!healthResponse.ok) {
         throw new Error(t.connectionError);
+      }
+
+      if (playersResponse.status === 304) {
+        setConnectionState((current) => (silent && current === "connected" ? current : "connected"));
+        return;
+      }
+
+      if (!playersResponse.ok) {
+        throw new Error(t.connectionError);
+      }
+
+      const etag = playersResponse.headers.get("ETag");
+      if (etag) {
+        playersEtagRef.current = etag;
       }
 
       const playersData = (await playersResponse.json()) as TrackingPlayersResponse;
@@ -73,7 +92,7 @@ export default function TrackingView() {
 
     const pollTimer = window.setInterval(() => {
       void loadPlayers(true);
-    }, PLAYERS_POLL_INTERVAL_MS);
+    }, TRACKING_PLAYERS_POLL_MS);
 
     return () => {
       window.clearInterval(pollTimer);

@@ -3,16 +3,24 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useTournament } from "../useTournament";
-import { Plus, Trash2, Save, RotateCcw, Sliders, PlayCircle, PlusCircle, Upload, Download } from "lucide-react";
+import { Plus, Trash2, Save, RotateCcw, Sliders, PlayCircle, PlusCircle, Upload, Download, ShieldAlert, X } from "lucide-react";
 import { BlindLevel, TournamentType, PayoutStructure } from "../types";
 import { tournamentStore } from "../store";
+import { localApi } from "../config/api";
 import { getCurrencyConfig, TOURNAMENT_CURRENCIES } from "../currency";
 import { importBlindStructureFromFile, exportBlindStructureToExcel } from "../blindStructureImportExport";
+import {
+  buildTournamentBackupExport,
+  downloadTournamentBackupJson,
+  parseTournamentBackup,
+  type TournamentBackupPayload,
+} from "../tournament/tournamentBackup";
+import type { TournamentDatabase } from "../server/tournamentDatabase";
 
 export default function SettingsView() {
-  const { state, updateBlindStructure, updateSettingsAndPayouts } = useTournament();
+  const { state, updateBlindStructure, updateSettingsAndPayouts, resetDatabase, importTournamentBackup } = useTournament();
   const { settings } = state;
 
   const [formState, setFormState] = useState({
@@ -25,7 +33,34 @@ export default function SettingsView() {
   });
   const [localPayouts, setLocalPayouts] = useState<PayoutStructure[]>(state.payouts || []);
   const [showSavedToast, setShowSavedToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState("TOURNAMENT SETTINGS SAVED & PERSISTED SUCCESSFULLY!");
+  const [showNewTournamentConfirm, setShowNewTournamentConfirm] = useState(false);
+  const [showImportConfirm, setShowImportConfirm] = useState(false);
+  const [pendingImportPayload, setPendingImportPayload] = useState<TournamentBackupPayload | null>(null);
+  const [pendingImportLabel, setPendingImportLabel] = useState("");
+  const [backupBusy, setBackupBusy] = useState(false);
   const blindImportInputRef = useRef<HTMLInputElement>(null);
+  const tournamentImportInputRef = useRef<HTMLInputElement>(null);
+
+  const syncFormFromStore = useCallback(() => {
+    const current = tournamentStore.getState();
+    setFormState({
+      ...current.settings,
+      currency: current.settings.currency ?? "USD",
+      lateRegLevel: current.settings.lateRegLevel ?? 7,
+      isMultiDay: current.settings.isMultiDay ?? false,
+      totalDays: current.settings.totalDays ?? 0,
+      currentDay: current.settings.currentDay ?? 1,
+    });
+    setLocalPayouts(current.payouts || []);
+  }, []);
+
+  const hasTournamentData =
+    state.players.length > 0
+    || state.tables.length > 0
+    || state.history.length > 0
+    || state.clock.elapsedTime > 0
+    || Boolean(state.clock.tournamentStartedAt);
 
   // Financial calculations helper
   const getFinancials = () => {
@@ -231,8 +266,103 @@ export default function SettingsView() {
     setFormState(prev => ({ ...prev, blindStructure: finalStructure }));
   };
 
+  const handleExportTournamentBackup = async () => {
+    setBackupBusy(true);
+    try {
+      const response = await fetch(localApi("/api/data"));
+      if (!response.ok) {
+        throw new Error("Could not read tournament data from server.");
+      }
+      const data = await response.json() as TournamentDatabase;
+      downloadTournamentBackupJson(buildTournamentBackupExport(data));
+      tournamentStore.logActivity("settings", `Exported full tournament backup (${data.settings.name || data.settings.id})`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Export failed.";
+      alert(message);
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const handleTournamentImportFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (loadEvent) => {
+      try {
+        const raw = JSON.parse(String(loadEvent.target?.result ?? ""));
+        const parsed = parseTournamentBackup(raw);
+        if (parsed.ok === false) {
+          alert(parsed.error);
+          return;
+        }
+
+        const backup: TournamentBackupPayload = {
+          backupVersion: typeof raw.backupVersion === "number" ? raw.backupVersion : 1,
+          exportedAt: typeof raw.exportedAt === "string" ? raw.exportedAt : new Date().toISOString(),
+          settings: parsed.data.settings,
+          clock: parsed.data.clock,
+          players: parsed.data.players,
+          tables: parsed.data.tables,
+          history: parsed.data.history,
+          payouts: parsed.data.payouts,
+          floorCalls: parsed.data.floorCalls,
+          dealerRotation: parsed.data.dealerRotation,
+        };
+
+        setPendingImportPayload(backup);
+        setPendingImportLabel(backup.settings.name || backup.settings.id || file.name);
+        setShowImportConfirm(true);
+      } catch {
+        alert("Could not parse tournament backup JSON.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleConfirmImport = async () => {
+    if (!pendingImportPayload) return;
+
+    setBackupBusy(true);
+    try {
+      await importTournamentBackup(pendingImportPayload);
+      syncFormFromStore();
+      setShowImportConfirm(false);
+      setPendingImportPayload(null);
+      setPendingImportLabel("");
+      setToastMessage("TOURNAMENT BACKUP IMPORTED SUCCESSFULLY!");
+      setShowSavedToast(true);
+      setTimeout(() => setShowSavedToast(false), 3000);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Import failed.";
+      alert(message);
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const handleConfirmNewTournament = async () => {
+    setBackupBusy(true);
+    try {
+      await resetDatabase();
+      syncFormFromStore();
+      setShowNewTournamentConfirm(false);
+      setToastMessage("NEW TOURNAMENT STARTED — PLAYERS, TABLES, CLOCK, AND HISTORY CLEARED.");
+      setShowSavedToast(true);
+      setTimeout(() => setShowSavedToast(false), 4000);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not start a new tournament.";
+      alert(message);
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
   const handleSave = () => {
     updateSettingsAndPayouts(formState, localPayouts);
+    setToastMessage("TOURNAMENT SETTINGS SAVED & PERSISTED SUCCESSFULLY!");
     setShowSavedToast(true);
     setTimeout(() => setShowSavedToast(false), 3000);
   };
@@ -264,8 +394,8 @@ export default function SettingsView() {
     <div className="bg-zinc-950 text-zinc-100 p-6 min-h-screen">
       {/* Toast Notification */}
       {showSavedToast && (
-        <div className="fixed bottom-6 right-6 z-50 bg-emerald-500 text-black px-6 py-3 rounded-xl font-bold shadow-lg shadow-emerald-500/10 flex items-center gap-2 animate-bounce">
-          <span>✓</span> TOURNAMENT SETTINGS SAVED & PERSISTED SUCCESSFULLY!
+        <div className="fixed bottom-6 right-6 z-50 bg-emerald-500 text-black px-6 py-3 rounded-xl font-bold shadow-lg shadow-emerald-500/10 flex items-center gap-2 animate-bounce max-w-md">
+          <span>✓</span> {toastMessage}
         </div>
       )}
 
@@ -276,7 +406,38 @@ export default function SettingsView() {
             <h1 className="text-2xl font-black uppercase tracking-wider">TOURNAMENT CONFIGURATION</h1>
             <p className="text-zinc-400 text-xs mt-1">Configure blind timelines, buy-ins, fees, chip counts, and structure templates.</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <input
+              ref={tournamentImportInputRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={handleTournamentImportFile}
+            />
+            <button
+              type="button"
+              disabled={backupBusy}
+              onClick={() => tournamentImportInputRef.current?.click()}
+              className="px-4 py-2.5 bg-zinc-900 border border-zinc-800 hover:border-zinc-650 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-1.5 text-zinc-100 disabled:opacity-50"
+            >
+              <Upload className="w-3.5 h-3.5" /> Import JSON
+            </button>
+            <button
+              type="button"
+              disabled={backupBusy}
+              onClick={() => void handleExportTournamentBackup()}
+              className="px-4 py-2.5 bg-zinc-900 border border-zinc-800 hover:border-zinc-650 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-1.5 text-zinc-100 disabled:opacity-50"
+            >
+              <Download className="w-3.5 h-3.5" /> Export JSON
+            </button>
+            <button
+              type="button"
+              disabled={backupBusy}
+              onClick={() => setShowNewTournamentConfirm(true)}
+              className="px-4 py-2.5 bg-red-950/80 border border-red-500/40 hover:border-red-400/70 text-red-200 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-1.5 disabled:opacity-50"
+            >
+              <RotateCcw className="w-3.5 h-3.5" /> New Tournament
+            </button>
             <button 
               onClick={handleSave}
               className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-black rounded-xl text-xs font-black transition flex items-center gap-1.5 uppercase tracking-wider shadow-lg shadow-emerald-500/10"
@@ -891,6 +1052,121 @@ export default function SettingsView() {
 
         </div>
       </div>
+
+      {showNewTournamentConfirm ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+          <div className="bg-zinc-900 border border-red-500/40 rounded-2xl max-w-lg w-full p-6 shadow-2xl relative space-y-4">
+            <button
+              type="button"
+              onClick={() => setShowNewTournamentConfirm(false)}
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white transition"
+              aria-label="Close new tournament confirmation"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 text-red-400">
+              <ShieldAlert className="w-6 h-6 shrink-0" />
+              <h3 className="text-lg font-black uppercase tracking-wider text-zinc-100">
+                Start New Tournament?
+              </h3>
+            </div>
+
+            <p className="text-sm text-zinc-300 leading-relaxed">
+              This button is only for creating a brand-new tournament. It will permanently delete all current tournament data,
+              including players, tables, clock progress, payouts, dealer rotation, floor calls, and history.
+              Your license is not affected.
+            </p>
+
+            {hasTournamentData ? (
+              <p className="text-sm text-amber-200/95 leading-relaxed font-medium border border-amber-500/30 bg-amber-500/10 rounded-xl px-3 py-2">
+                You currently have saved tournament data. Export a JSON backup first if you may need this event again.
+              </p>
+            ) : null}
+
+            <p className="text-xs text-zinc-500 uppercase tracking-wider font-bold">
+              This action cannot be undone.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowNewTournamentConfirm(false)}
+                className="px-4 py-2 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 text-xs font-bold uppercase rounded-xl tracking-wider transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={backupBusy}
+                onClick={() => void handleConfirmNewTournament()}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-black uppercase rounded-xl tracking-wider transition disabled:opacity-50"
+              >
+                Yes, Start New Tournament
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showImportConfirm && pendingImportPayload ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+          <div className="bg-zinc-900 border border-amber-500/40 rounded-2xl max-w-lg w-full p-6 shadow-2xl relative space-y-4">
+            <button
+              type="button"
+              onClick={() => {
+                setShowImportConfirm(false);
+                setPendingImportPayload(null);
+                setPendingImportLabel("");
+              }}
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white transition"
+              aria-label="Close import confirmation"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 text-amber-400">
+              <ShieldAlert className="w-6 h-6 shrink-0" />
+              <h3 className="text-lg font-black uppercase tracking-wider text-zinc-100">
+                Import Tournament Backup?
+              </h3>
+            </div>
+
+            <p className="text-sm text-zinc-300 leading-relaxed">
+              You are importing tournament data from <span className="text-amber-200 font-bold">{pendingImportLabel}</span>.
+              This will delete all current tournament data and replace it with the imported backup
+              (players, tables, clock, structure, payouts, dealers, and related records).
+              License information is never imported or exported.
+            </p>
+
+            <p className="text-sm text-amber-200/95 leading-relaxed font-medium border border-amber-500/30 bg-amber-500/10 rounded-xl px-3 py-2">
+              If you need to keep the current event, use Export JSON before continuing.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowImportConfirm(false);
+                  setPendingImportPayload(null);
+                  setPendingImportLabel("");
+                }}
+                className="px-4 py-2 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 text-xs font-bold uppercase rounded-xl tracking-wider transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={backupBusy}
+                onClick={() => void handleConfirmImport()}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-black text-xs font-black uppercase rounded-xl tracking-wider transition disabled:opacity-50"
+              >
+                Yes, Replace With Import
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

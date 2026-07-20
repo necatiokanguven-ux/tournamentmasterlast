@@ -1,14 +1,19 @@
 import { Router } from "express";
-import type { FloorTeam } from "../types";
+import type { DealerTimerModeSetting, DealerZone, FloorTeam } from "../types";
 import type { TournamentDatabase } from "../server/tournamentDatabase";
 import {
   bumpDatabaseMeta,
+  DEFAULT_DEALER_TIMER_MODE,
   normalizeSettings,
+  validateDealerZones,
   validateFloorTeams,
 } from "../server/tournamentDatabase";
+import { resetDealerTimerForAllTables } from "../dealer/dealerRuntimeStore";
 import {
   acknowledgeFloorCall,
   getActiveFloorCallsForTeam,
+  getMoveTargetTables,
+  movePlayerToSeat,
   resolveFloorCall,
 } from "../server/tournamentOperations";
 import { buildSeatSnapshot } from "../server/tableSnapshot";
@@ -93,6 +98,8 @@ export function createFloorRouter(port: number, getDb: DbAccessor, saveDb: DbSav
           occupants: snapshot.seats.filter((seat) => !seat.isOpen).length,
           seats: snapshot.seats.map((seat) => ({
             seatNumber: seat.seatNumber,
+            seatIndex: seat.seatIndex,
+            playerId: seat.playerId,
             displayName: seat.displayName,
             isOpen: seat.isOpen,
             status: seat.status,
@@ -100,7 +107,7 @@ export function createFloorRouter(port: number, getDb: DbAccessor, saveDb: DbSav
         };
       })
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-      .sort((a, b) => a.tableNumber - b.tableNumber);
+      .sort((a, b) => b.occupants - a.occupants || a.tableNumber - b.tableNumber);
 
     res.json({
       version: db.meta.lastModified,
@@ -108,6 +115,54 @@ export function createFloorRouter(port: number, getDb: DbAccessor, saveDb: DbSav
       teamName: team.name,
       tables,
     });
+  });
+
+  router.get("/move-targets", (req, res) => {
+    const teamId = String(req.query.teamId ?? "");
+    if (!teamId) {
+      res.status(400).json({ error: "TEAM_ID_REQUIRED" });
+      return;
+    }
+
+    const db = getDb();
+    const team = (db.settings.floorTeams ?? []).find((entry) => entry.id === teamId);
+    if (!team) {
+      res.status(404).json({ error: "TEAM_NOT_FOUND" });
+      return;
+    }
+
+    res.json({
+      version: db.meta.lastModified,
+      tables: getMoveTargetTables(db),
+    });
+  });
+
+  router.post("/move-player", (req, res) => {
+    const teamId = String(req.body?.teamId ?? "");
+    const playerId = String(req.body?.playerId ?? "");
+    const targetTableNumber = Number.parseInt(String(req.body?.targetTableNumber ?? ""), 10);
+    const targetSeatIndex = Number.parseInt(String(req.body?.targetSeatIndex ?? ""), 10);
+
+    if (!teamId || !playerId) {
+      res.status(400).json({ error: "INVALID_REQUEST" });
+      return;
+    }
+
+    if (!Number.isFinite(targetTableNumber) || !Number.isFinite(targetSeatIndex)) {
+      res.status(400).json({ error: "INVALID_TARGET" });
+      return;
+    }
+
+    const db = getDb();
+    const result = movePlayerToSeat(db, teamId, playerId, targetTableNumber, targetSeatIndex);
+
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
+
+    saveDb(db);
+    res.json({ success: true, version: db.meta.lastModified });
   });
 
   router.post("/calls/:callId/ack", (req, res) => {
@@ -191,17 +246,60 @@ export function createSettingsRouter(getDb: DbAccessor, saveDb: DbSaver) {
     res.json({ success: true, teams: db.settings.floorTeams, version: db.meta.lastModified });
   });
 
+  router.get("/dealer-zones", (_req, res) => {
+    const db = getDb();
+    res.json({
+      zones: db.settings.dealerZones ?? [],
+      tables: db.tables.map((table) => ({ id: table.id, number: table.number })),
+    });
+  });
+
+  router.put("/dealer-zones", (req, res) => {
+    const zones = req.body?.zones as DealerZone[] | undefined;
+    if (!Array.isArray(zones)) {
+      res.status(400).json({ error: "INVALID_ZONES" });
+      return;
+    }
+
+    const db = getDb();
+    const validationError = validateDealerZones(
+      zones,
+      db.tables.map((table) => table.number),
+    );
+
+    if (validationError) {
+      res.status(400).json({ error: "INVALID_ASSIGNMENT", message: validationError });
+      return;
+    }
+
+    db.settings = normalizeSettings({
+      ...db.settings,
+      dealerZones: zones,
+    });
+    bumpDatabaseMeta(db);
+    saveDb(db);
+    res.json({ success: true, zones: db.settings.dealerZones, version: db.meta.lastModified });
+  });
+
   router.get("/dealer-timers", (_req, res) => {
     const db = getDb();
     res.json({
+      timerMode: db.settings.dealerTimerMode ?? DEFAULT_DEALER_TIMER_MODE,
       callTimeSeconds: db.settings.dealerCallTimeSeconds ?? 30,
       playerTimeSeconds: db.settings.dealerPlayerTimeSeconds ?? 60,
     });
   });
 
   router.put("/dealer-timers", (req, res) => {
+    const timerMode = String(req.body?.timerMode ?? "") as DealerTimerModeSetting;
     const callTimeSeconds = Number(req.body?.callTimeSeconds);
     const playerTimeSeconds = Number(req.body?.playerTimeSeconds);
+    const allowedModes: DealerTimerModeSetting[] = ["none", "call_time", "player_time"];
+
+    if (!allowedModes.includes(timerMode)) {
+      res.status(400).json({ error: "INVALID_TIMER_MODE" });
+      return;
+    }
 
     if (
       !Number.isFinite(callTimeSeconds) ||
@@ -216,15 +314,24 @@ export function createSettingsRouter(getDb: DbAccessor, saveDb: DbSaver) {
     }
 
     const db = getDb();
+    const previousMode = db.settings.dealerTimerMode ?? DEFAULT_DEALER_TIMER_MODE;
+
     db.settings = normalizeSettings({
       ...db.settings,
+      dealerTimerMode: timerMode,
       dealerCallTimeSeconds: Math.round(callTimeSeconds),
       dealerPlayerTimeSeconds: Math.round(playerTimeSeconds),
     });
     bumpDatabaseMeta(db);
     saveDb(db);
+
+    if (previousMode !== timerMode) {
+      resetDealerTimerForAllTables();
+    }
+
     res.json({
       success: true,
+      timerMode: db.settings.dealerTimerMode,
       callTimeSeconds: db.settings.dealerCallTimeSeconds,
       playerTimeSeconds: db.settings.dealerPlayerTimeSeconds,
       version: db.meta.lastModified,

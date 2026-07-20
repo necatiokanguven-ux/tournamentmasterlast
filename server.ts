@@ -1,421 +1,94 @@
 import express from "express";
+import http from "http";
 import path from "path";
-import fs from "fs";
-import { exec } from "child_process";
-import { Player, Table, TournamentSettings, ClockState, HistoryEvent } from "./src/types";
+import { loadProjectEnv } from "./src/server/loadEnv";
+import { buildLocalAppUrl, resolveServerPort } from "./src/config/serverPort";
+
+loadProjectEnv();
 import { createTrackingRouter } from "./src/tracking/trackingRoutes";
 import { registerLicenseRoutes, requireValidLicense } from "./src/license/serverRoutes";
 import { applyLocalServerCors } from "./src/config/cors";
-import { normalizeDatabase, bumpDatabaseMeta, type TournamentDatabase } from "./src/server/tournamentDatabase";
+import { normalizeDatabase, type TournamentDatabase } from "./src/server/tournamentDatabase";
 import { createDealerRouter } from "./src/dealer/dealerRoutes";
+import { closeDealerTimerWebSockets } from "./src/dealer/dealerTimerWebSocket";
 import { createFloorRouter, createSettingsRouter } from "./src/floor/floorRoutes";
+import {
+  createDealerControlRouter,
+  runDealerRotationOnTableClosed,
+  syncDealerRotationAfterSave,
+} from "./src/server/dealerRotation/dealerControlRoutes";
+import { runDealerControlBackgroundTick } from "./src/server/dealerRotation/dealerControlBackgroundTick";
+import { attachWebSockets } from "./src/server/websocket/attachWebSockets";
+import { buildClockChannelPayload } from "./src/server/websocket/clockChannel";
+import type { TournamentSocketHub } from "./src/server/websocket/TournamentSocketHub";
+import { beginPhoneGrace } from "./src/server/dealerRotation/phoneGrace";
+import { createRepositoryAsync } from "./src/server/repository/createRepository";
+import { isShuttingDown, registerGracefulShutdown } from "./src/server/gracefulShutdown";
+import { resolveDatabaseReadUrl, resolveDatabaseUrl } from "./src/server/repository/databaseConfig";
+import { PostgresRepository } from "./src/server/repository/postgres/PostgresRepository";
+import { getMetricsSnapshot, getRedisStatus } from "./src/server/redis/metricsStore";
+import {
+  getCachedSnapshot,
+  getSnapshotCacheStatus,
+  invalidateSnapshotCache,
+} from "./src/server/redis/snapshotCache";
+import { applyClockSyncToDatabase } from "./src/server/clockSync";
+import { buildDatabaseFromTournamentBackup } from "./src/server/tournamentImport";
+import {
+  getRegisteredWsRpcMethods,
+  isWsRpcWritesEnabled,
+  registerWsRpc,
+} from "./src/server/websocket/wsRpcDispatcher";
+import { buildAdminDashboardSnapshot } from "./src/server/adminDashboard";
+import { createIdScanRouter } from "./src/server/idScan/idScanRoutes";
+import { buildLocalUrl, getLocalNetworkAddresses, getPrimaryLocalAddress } from "./src/server/localNetwork";
+import { openDirectorBrowser } from "./src/server/openBrowser";
 
 const app = express();
-const PORT = 3000;
-const DB_FILE = path.join(process.cwd(), "db.json");
-const LOGS_DIR = path.join(process.cwd(), "logs");
-const loggedEventIds = new Set<string>();
+const PORT = resolveServerPort();
 
-function formatActivityLogLine(event: HistoryEvent): string {
-  const timestamp = new Date(event.timestamp).toLocaleString();
-  const player = event.playerName ? ` [${event.playerName}]` : "";
-  return `[${timestamp}] ${event.type.toUpperCase()}${player}: ${event.description}`;
-}
-
-function ensureLogsDir() {
-  if (!fs.existsSync(LOGS_DIR)) {
-    fs.mkdirSync(LOGS_DIR, { recursive: true });
-  }
-}
-
-function getActivityLogPath(tournamentId: string) {
-  const safeId = (tournamentId || "tournament").replace(/[^\w\-]+/g, "_");
-  return path.join(LOGS_DIR, `${safeId}-activity.log`);
-}
-
-function registerExistingHistory(history: HistoryEvent[] = []) {
-  for (const event of history) {
-    loggedEventIds.add(event.id);
-  }
-}
-
-function appendActivityLog(history: HistoryEvent[] = [], tournamentId: string) {
-  const newEvents = history.filter((event) => !loggedEventIds.has(event.id));
-  if (newEvents.length === 0) return;
-
-  ensureLogsDir();
-  const logPath = getActivityLogPath(tournamentId);
-  const chronological = [...newEvents].sort(
-    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-  );
-  const lines = chronological.map((event) => formatActivityLogLine(event)).join("\n") + "\n";
-  fs.appendFileSync(logPath, lines, "utf-8");
-
-  for (const event of newEvents) {
-    loggedEventIds.add(event.id);
-  }
-}
-
-app.use(express.json());
-applyLocalServerCors(app);
-
-function isSeedWaitingPlayer(player: Player): boolean {
-  return player.id.startsWith("player-wait-")
-    || (player.firstName === "Waiting" && /^Player \d+$/.test(player.lastName));
-}
-
-function sanitizeDatabase(db: any) {
-  if (!Array.isArray(db.players)) return db;
-
-  const players = (db.players as Player[]).filter(player => !isSeedWaitingPlayer(player));
-  const playerIds = new Set(players.map(player => player.id));
-  const tables = Array.isArray(db.tables)
-    ? (db.tables as Table[]).map(table => ({
-        ...table,
-        seats: table.seats.map(seatId => (seatId && playerIds.has(seatId) ? seatId : null)),
-      }))
-    : db.tables;
-
-  return { ...db, players, tables };
-}
-
-// Helper to load database with rich defaults matching screenshot_100.png exactly
-function loadDatabase() {
-  if (fs.existsSync(DB_FILE)) {
-    try {
-      const raw = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
-      const sanitized = sanitizeDatabase(raw);
-      if (Array.isArray(raw.players) && Array.isArray(sanitized.players) && sanitized.players.length !== raw.players.length) {
-        return persistDatabase(sanitized);
-      }
-      return normalizeDatabase(sanitized);
-    } catch (e) {
-      console.error("Error reading database, using defaults", e);
-    }
-  }
-
-  // Fallback defaults matching screenshot_100.png
-  const defaultSettings: TournamentSettings = {
-    id: "SMPC-2025-08",
-    name: "Summer Poker Championship",
-    buyIn: 2000,
-    fee: 150,
-    startingStack: 30000,
-    bonusChips: 5000,
-    addonChips: 15000,
-    rebuyChips: 30000,
-    maxPlayers: 150,
-    maxTables: 15,
-    blindTime: 20,
-    breakTime: 15,
-    breakFrequency: 6,
-    type: "Re-entry",
-    lateRegLevel: 7,
-    currency: "USD",
-    isMultiDay: true,
-    totalDays: 3,
-    currentDay: 2,
-    blindStructure: [
-      { level: 1, smallBlind: 100, bigBlind: 200, ante: 200, duration: 20 },
-      { level: 2, smallBlind: 200, bigBlind: 300, ante: 300, duration: 20 },
-      { level: 3, smallBlind: 200, bigBlind: 400, ante: 400, duration: 20 },
-      { level: 4, smallBlind: 300, bigBlind: 600, ante: 600, duration: 20 },
-      { level: 5, smallBlind: 400, bigBlind: 800, ante: 800, duration: 20 },
-      { level: 6, smallBlind: 500, bigBlind: 1000, ante: 1000, duration: 20 },
-      { level: 7, smallBlind: 0, bigBlind: 0, ante: 0, duration: 15, isBreak: true },
-      { level: 8, smallBlind: 600, bigBlind: 1200, ante: 1200, duration: 20 },
-      { level: 9, smallBlind: 800, bigBlind: 1600, ante: 1600, duration: 20 },
-      { level: 10, smallBlind: 1000, bigBlind: 2000, ante: 2000, duration: 20 },
-      { level: 11, smallBlind: 1200, bigBlind: 2400, ante: 2400, duration: 20 },
-      { level: 12, smallBlind: 1000, bigBlind: 2000, ante: 2000, duration: 20 }, // Level 12 active as per screenshot
-      { level: 13, smallBlind: 1500, bigBlind: 3000, ante: 3000, duration: 20 },
-      { level: 14, smallBlind: 2000, bigBlind: 4000, ante: 4000, duration: 20 },
-      { level: 15, smallBlind: 0, bigBlind: 0, ante: 0, duration: 15, isBreak: true },
-      { level: 16, smallBlind: 3000, bigBlind: 6000, ante: 6000, duration: 20 },
-      { level: 17, smallBlind: 4000, bigBlind: 8000, ante: 8000, duration: 20 },
-      { level: 18, smallBlind: 5000, bigBlind: 10000, ante: 10000, duration: 20 }
-    ]
-  };
-
-  const defaultClock: ClockState = {
-    currentLevelIndex: 11, // Level 12 (0-indexed 11)
-    timeRemaining: 1122, // 18:42 in seconds
-    isRunning: false,
-    elapsedTime: 22818, // 06:42:18 elapsed
-    soundEnabled: true,
-    fullscreen: false
-  };
-
-  // Preload players to make things look incredibly complete (138 Total, 42 Remaining as in screenshot)
-  const countries = ["USA", "Turkey", "Germany", "France", "Italy", "Brazil", "UK", "Canada", "Spain", "Japan", "Russia", "Netherlands"];
-  const players: Player[] = [];
-  
-  // High quality names for top players matching screenshot
-  const specificPlayers = [
-    { firstName: "Ali", lastName: "Yilmaz", nickname: "Ali", country: "Turkey", status: "Eliminated" as const, chips: 0, tableId: null, seatIndex: null, reentries: 0, rebuys: 0, addons: 0, eliminationOrder: 43 },
-    { firstName: "Mehmet", lastName: "Demir", nickname: "Mehmet", country: "Turkey", status: "Playing" as const, chips: 120000, tableId: "table-1", seatIndex: 0, reentries: 1, rebuys: 0, addons: 1, eliminationOrder: null },
-    { firstName: "John", lastName: "Doe", nickname: "JohnnyD", country: "USA", status: "Playing" as const, chips: 150000, tableId: "table-1", seatIndex: 1, reentries: 0, rebuys: 0, addons: 0, eliminationOrder: null },
-    { firstName: "Sarah", lastName: "Conor", nickname: "Terminator", country: "Germany", status: "Playing" as const, chips: 85000, tableId: "table-1", seatIndex: 2, reentries: 0, rebuys: 0, addons: 1, eliminationOrder: null },
-    { firstName: "Carlos", lastName: "Silva", nickname: "ElToro", country: "Brazil", status: "Playing" as const, chips: 210000, tableId: "table-1", seatIndex: 3, reentries: 1, rebuys: 0, addons: 1, eliminationOrder: null },
-    { firstName: "Jean", lastName: "Dupont", nickname: "Bagguette", country: "France", status: "Playing" as const, chips: 35000, tableId: "table-1", seatIndex: 4, reentries: 0, rebuys: 0, addons: 0, eliminationOrder: null },
-    { firstName: "Emma", lastName: "Watson", nickname: "Hermione", country: "UK", status: "Playing" as const, chips: 90000, tableId: "table-2", seatIndex: 0, reentries: 0, rebuys: 0, addons: 1, eliminationOrder: null },
-    { firstName: "Yuki", lastName: "Sato", nickname: "Samurai", country: "Japan", status: "Playing" as const, chips: 130000, tableId: "table-2", seatIndex: 1, reentries: 1, rebuys: 0, addons: 0, eliminationOrder: null },
-    { firstName: "Max", lastName: "Mustermann", nickname: "Kaiser", country: "Germany", status: "Playing" as const, chips: 75000, tableId: "table-2", seatIndex: 2, reentries: 0, rebuys: 0, addons: 0, eliminationOrder: null },
-    { firstName: "Elena", lastName: "Petrova", nickname: "Matryoshka", country: "Russia", status: "Playing" as const, chips: 180000, tableId: "table-2", seatIndex: 3, reentries: 0, rebuys: 0, addons: 1, eliminationOrder: null },
-    { firstName: "Antonio", lastName: "Banderas", nickname: "Zorro", country: "Spain", status: "Playing" as const, chips: 45000, tableId: "table-2", seatIndex: 4, reentries: 0, rebuys: 0, addons: 0, eliminationOrder: null }
-  ];
-
-  specificPlayers.forEach((p, i) => {
-    players.push({
-      id: `player-${i + 1}`,
-      firstName: p.firstName,
-      lastName: p.lastName,
-      nickname: p.nickname,
-      country: p.country,
-      phone: "+1 555-010" + i,
-      notes: "Preloaded player",
-      status: p.status,
-      chips: p.chips,
-      tableId: p.tableId,
-      seatIndex: p.seatIndex,
-      reentries: p.reentries,
-      rebuys: p.rebuys,
-      addons: p.addons,
-      eliminationOrder: p.eliminationOrder,
-      registeredAt: new Date(Date.now() - 3600000 * 5).toISOString()
-    });
-  });
-
-  // Load the remaining to make Total = 138, Playing = 42, Eliminated = 96
-  const totalWanted = 138;
-  const playingWanted = 42;
-  const currentPlayingCount = players.filter(p => p.status === 'Playing').length;
-  const currentEliminatedCount = players.filter(p => p.status === 'Eliminated').length;
-
-  for (let i = players.length; i < totalWanted; i++) {
-    const isPlaying = (players.filter(p => p.status === 'Playing').length < playingWanted);
-    const country = countries[Math.floor(Math.random() * countries.length)];
-    const status = isPlaying ? "Playing" : "Eliminated";
-    const tableId = isPlaying ? `table-${Math.floor(Math.random() * 5) + 1}` : null;
-    
-    players.push({
-      id: `player-${i + 1}`,
-      firstName: `Player`,
-      lastName: `${i + 1}`,
-      nickname: `ProPlayer_${i + 1}`,
-      country: country,
-      phone: `+1 555-01${i}`,
-      notes: `Automated seed player ${i + 1}`,
-      status: status,
-      chips: isPlaying ? 97400 : 0, // 97,400 chip stack to make average exactly 97,400
-      tableId: tableId,
-      seatIndex: null, // Will seat them dynamically or keep in playing status
-      reentries: Math.random() > 0.8 ? 1 : 0,
-      rebuys: 0,
-      addons: Math.random() > 0.5 ? 1 : 0,
-      eliminationOrder: isPlaying ? null : (i - 40),
-      registeredAt: new Date(Date.now() - 3600000 * 4).toISOString()
-    });
-  }
-
-  // Define tables
-  const tables: Table[] = [];
-  for (let t = 1; t <= 5; t++) {
-    const tableId = `table-${t}`;
-    const seats: (string | null)[] = Array(10).fill(null);
-    
-    // Distribute playing players into seats for tables
-    const tablePlayers = players.filter(p => p.status === "Playing" && p.tableId === tableId);
-    tablePlayers.forEach((p, index) => {
-      if (index < 10) {
-        seats[index] = p.id;
-        p.seatIndex = index;
-      } else {
-        // Overflow playing players get reset table seating or status
-        p.tableId = null;
-        p.seatIndex = null;
-      }
-    });
-
-    tables.push({
-      id: tableId,
-      number: t,
-      dealerSeatIndex: Math.floor(Math.random() * 10),
-      seats: seats
-    });
-  }
-
-  // Seat other playing players that were generated randomly without seats
-  const unseatedPlaying = players.filter(p => p.status === "Playing" && p.seatIndex === null);
-  unseatedPlaying.forEach(p => {
-    // Find first empty seat across tables 1-5
-    for (const t of tables) {
-      const emptyIdx = t.seats.indexOf(null);
-      if (emptyIdx !== -1) {
-        t.seats[emptyIdx] = p.id;
-        p.tableId = t.id;
-        p.seatIndex = emptyIdx;
-        break;
-      }
-    }
-  });
-
-  // Default HistoryEvents matching screenshot_100.png exactly
-  const defaultHistory: HistoryEvent[] = [
-    { id: "h1", timestamp: new Date(Date.now() - 25 * 60000).toISOString(), type: "undo", description: "Payout updated" },
-    { id: "h2", timestamp: new Date(Date.now() - 18 * 60000).toISOString(), type: "undo", description: "Level 11 completed" },
-    { id: "h3", timestamp: new Date(Date.now() - 12 * 60000).toISOString(), type: "undo", description: "Break finished" },
-    { id: "h4", timestamp: new Date(Date.now() - 10 * 60000).toISOString(), type: "undo", description: "Registration closed" },
-    { id: "h5", timestamp: new Date(Date.now() - 7 * 60000).toISOString(), type: "registration", description: "New player registered" },
-    { id: "h6", timestamp: new Date(Date.now() - 5 * 60000).toISOString(), type: "reentry", description: "Mehmet re-entry" },
-    { id: "h7", timestamp: new Date(Date.now() - 3 * 60000).toISOString(), type: "balance", description: "Table 3 balanced" },
-    { id: "h8", timestamp: new Date(Date.now() - 2 * 60000).toISOString(), type: "bust", description: "Ali eliminated" }
-  ];
-
-  const db = {
-    settings: defaultSettings,
-    clock: defaultClock,
-    players: players,
-    tables: tables,
-    history: defaultHistory,
-    payouts: [],
-    floorCalls: [],
-    meta: { lastModified: Date.now() },
-  };
-
-  return persistDatabase(db);
-}
-
-function persistDatabase(data: Partial<TournamentDatabase>): TournamentDatabase {
-  const normalized = normalizeDatabase(data);
-  bumpDatabaseMeta(normalized);
-  const tempPath = `${DB_FILE}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(normalized, null, 2), "utf-8");
-  fs.renameSync(tempPath, DB_FILE);
-  appendActivityLog(normalized.history || [], normalized.settings?.id || "tournament");
-  return normalized;
-}
-
-function saveDatabase(data: TournamentDatabase) {
-  try {
-    db = persistDatabase(data);
-  } catch (e) {
-    console.error("Error writing database file", e);
-  }
-}
-
-// Ensure database file is generated
-let db: TournamentDatabase = normalizeDatabase(loadDatabase());
-registerExistingHistory(db.history || []);
-
-const licenseGuard = requireValidLicense();
+let repository: Awaited<ReturnType<typeof createRepositoryAsync>>;
+let socketHub: TournamentSocketHub | null = null;
 
 function getDb(): TournamentDatabase {
-  return db;
+  return getCachedSnapshot(() => repository.get());
 }
 
-function setDb(next: TournamentDatabase) {
-  saveDatabase(next);
+function notifyMetaChanged(): void {
+  socketHub?.broadcastMeta(getDb().meta.lastModified);
 }
 
-// API Endpoints
-app.get("/api/data", licenseGuard, (req, res) => {
-  res.json(db);
-});
+function notifyClockChanged(): void {
+  socketHub?.broadcastClock(buildClockChannelPayload(getDb().clock));
+}
 
-app.get("/api/data/meta", licenseGuard, (_req, res) => {
-  res.json({ lastModified: db.meta.lastModified });
-});
+function notifyWsSideEffects(): void {
+  notifyMetaChanged();
+  socketHub?.broadcastFloorUpdates();
+  socketHub?.broadcastDealerPhonesForStaff();
+  socketHub?.broadcastDealerControlUpdates();
+}
 
-app.post("/api/save", licenseGuard, (req, res) => {
-  const incomingClientModified = Number(req.body?.meta?.lastModified) || 0;
-  const incoming = normalizeDatabase({
-    ...req.body,
-    floorCalls: Array.isArray(req.body?.floorCalls) ? req.body.floorCalls : db.floorCalls,
-  });
+function setDb(next: TournamentDatabase): void {
+  repository.save(next);
+  invalidateSnapshotCache();
+  notifyWsSideEffects();
+}
 
-  if (db.meta.lastModified > incomingClientModified) {
-    incoming.players = db.players;
-    incoming.tables = db.tables;
-    incoming.history = db.history;
-    incoming.floorCalls = db.floorCalls;
-    incoming.payouts = db.payouts;
-  }
-
-  saveDatabase(incoming);
-  res.json({
-    success: true,
-    message: "Database saved successfully",
-    lastModified: db.meta.lastModified,
-    data: db,
-  });
-});
-
-app.post("/api/reset", licenseGuard, (req, res) => {
-  if (fs.existsSync(DB_FILE)) {
-    fs.unlinkSync(DB_FILE);
-  }
-  db = normalizeDatabase(loadDatabase());
-  registerExistingHistory(db.history || []);
-  res.json({ success: true, data: db, message: "Database reset to factory defaults" });
-});
-
-app.get("/api/activity-log", licenseGuard, (req, res) => {
-  const tournamentId = db.settings?.id || "tournament";
-  const logPath = getActivityLogPath(tournamentId);
-
-  if (fs.existsSync(logPath)) {
-    res.type("text/plain").send(fs.readFileSync(logPath, "utf-8"));
-    return;
-  }
-
-  const fallback = [...(db.history || [])]
-    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-    .map((event) => formatActivityLogLine(event))
-    .join("\n");
-
-  res.type("text/plain").send(fallback);
-});
-
-// QR Live Tracking — local read-only tracking server
-app.use("/api/tracking", (req, res, next) => {
-  if (req.path === "/ping") {
-    next();
-    return;
-  }
-
-  licenseGuard(req, res, next);
-}, createTrackingRouter(PORT, () => db));
-
-app.use("/api/dealer", licenseGuard, createDealerRouter(PORT, getDb, setDb));
-app.use("/api/floor", licenseGuard, createFloorRouter(PORT, getDb, setDb));
-app.use("/api/settings", licenseGuard, createSettingsRouter(getDb, setDb));
-
-// License machine ID + local license storage
-registerLicenseRoutes(app);
+function saveDatabaseClockOnly(next: TournamentDatabase): void {
+  repository.saveClockOnly(next);
+  invalidateSnapshotCache();
+  notifyClockChanged();
+}
 
 function openBrowser(url: string) {
-  if (process.env.TM_AUTO_OPEN_BROWSER === "0") {
-    return;
-  }
-
-  const command =
-    process.platform === "win32"
-      ? `start "" "${url}"`
-      : process.platform === "darwin"
-        ? `open "${url}"`
-        : `xdg-open "${url}"`;
-
-  exec(command, { shell: process.platform === "win32" ? "cmd.exe" : "/bin/sh" }, (error) => {
-    if (error) {
-      console.error("Could not open browser automatically:", error.message);
-      console.log(`Open this URL manually: ${url}`);
-    }
-  });
+  openDirectorBrowser(url);
 }
 
-// Setup Vite Dev Server / Prod Server Static
-async function startServer() {
+async function startServer(
+  dealerControlRouter: ReturnType<typeof createDealerControlRouter>["router"],
+  dealerRotationTrigger: ReturnType<typeof createDealerControlRouter>["triggerService"],
+) {
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
@@ -425,20 +98,343 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    app.use(
+      express.static(distPath, {
+        setHeaders(res, filePath) {
+          if (filePath.endsWith(".html")) {
+            res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+            return;
+          }
+          if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+            res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+          }
+        },
+      }),
+    );
+    app.get("*", (_req, res) => {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
-  const appUrl = `http://localhost:${PORT}`;
-  app.listen(PORT, "0.0.0.0", () => {
+  const appUrl = buildLocalAppUrl(PORT);
+  const httpServer = http.createServer(app);
+  socketHub = attachWebSockets(httpServer, getDb);
+  socketHub.setDealerPhoneDisconnectHandler((dealerId) => {
+    const db = repository.get();
+    const dealer = db.dealerRotation.staff.find(entry => entry.id === dealerId);
+    if (!dealer) return;
+    beginPhoneGrace(dealer);
+    repository.save(db);
+    invalidateSnapshotCache();
+    socketHub?.broadcastDealerPhone(dealerId);
+    socketHub?.broadcastDealerControlUpdates();
+  });
+
+  let backgroundTickInterval: ReturnType<typeof setInterval> | null = null;
+
+  httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Express server listening on ${appUrl}`);
+    console.log(`Persistence backend: ${repository.backend}`);
+    console.log(`WebSocket hub: ${appUrl.replace(/^http/, "ws")}/ws/tournament`);
     console.log(`QR Live Tracking (Phase 1): ${appUrl}/track`);
-    console.log(`Dealer Tablet: ${appUrl}/dealer/setup?table=1`);
+    console.log(`Dealer Check-In: ${appUrl}/dealer/checkin`);
+    console.log(`Dealer Control API: ${appUrl}/api/dealer-control/state`);
     console.log(`Floor Mobile: ${appUrl}/floor?team=floor-1`);
     openBrowser(appUrl);
+
+    const BACKGROUND_TICK_MS = 5_000;
+    backgroundTickInterval = setInterval(() => {
+      if (isShuttingDown()) return;
+      const db = repository.get();
+      if (runDealerControlBackgroundTick(db, dealerRotationTrigger)) {
+        repository.save(db);
+        invalidateSnapshotCache();
+        notifyWsSideEffects();
+      }
+    }, BACKGROUND_TICK_MS);
   });
+
+  registerGracefulShutdown({
+    httpServer,
+    repository,
+    onShutdown: () => {
+      if (backgroundTickInterval) {
+        clearInterval(backgroundTickInterval);
+      }
+      socketHub?.close();
+      closeDealerTimerWebSockets();
+    },
+  });
+
+  return { httpServer };
 }
 
-startServer();
+async function bootstrap() {
+  const dataDir = process.env.TM_DATA_DIR?.trim();
+  const repositoryOptions = dataDir
+    ? {
+        dbFilePath: path.join(dataDir, "db.json"),
+        logsDirPath: path.join(dataDir, "logs"),
+      }
+    : {};
+
+  repository = await createRepositoryAsync(repositoryOptions);
+  repository.registerExistingHistory(repository.get().history || []);
+
+  const licenseGuard = requireValidLicense();
+
+  const { router: dealerControlRouter, triggerService: dealerRotationTrigger } = createDealerControlRouter(
+    PORT,
+    getDb,
+    setDb,
+    {
+      onDealerPhoneUpdated: (dealerId) => {
+        socketHub?.broadcastDealerPhone(dealerId);
+      },
+      onDealerControlUpdated: () => {
+        socketHub?.broadcastDealerControlUpdates();
+      },
+    },
+  );
+
+  registerWsRpc("clock.sync", (params) => {
+    if (!isWsRpcWritesEnabled()) {
+      return { ok: false, error: "WS_RPC_WRITES disabled (set WS_RPC_WRITES=true to enable)." };
+    }
+
+    const db = repository.get();
+    applyClockSyncToDatabase(db, params ?? {}, (at) => dealerRotationTrigger.onTournamentClockTick(at));
+    saveDatabaseClockOnly(db);
+
+    return {
+      ok: true,
+      payload: {
+        success: true,
+        clock: db.clock,
+      },
+    };
+  });
+
+  app.use(express.json({ limit: "6mb" }));
+  applyLocalServerCors(app);
+
+  app.get("/api/data", licenseGuard, (_req, res) => {
+    res.json(getDb());
+  });
+
+  app.get("/api/data/meta", licenseGuard, (_req, res) => {
+    res.json({ lastModified: getDb().meta.lastModified });
+  });
+
+  app.put("/api/clock/sync", licenseGuard, (req, res) => {
+    const body = req.body ?? {};
+    const db = repository.get();
+    applyClockSyncToDatabase(db, body, (at) => dealerRotationTrigger.onTournamentClockTick(at));
+    saveDatabaseClockOnly(db);
+
+    res.json({
+      success: true,
+      clock: db.clock,
+    });
+  });
+
+  app.post("/api/save", licenseGuard, (req, res) => {
+    const db = repository.get();
+    const incomingClientModified = Number(req.body?.meta?.lastModified) || 0;
+    const previousTableIds = new Set(db.tables.map(table => table.id));
+    const incoming = normalizeDatabase({
+      ...req.body,
+      floorCalls: Array.isArray(req.body?.floorCalls) ? req.body.floorCalls : db.floorCalls,
+      dealerRotation: db.dealerRotation,
+    });
+
+    if (db.meta.lastModified > incomingClientModified) {
+      incoming.players = db.players;
+      incoming.tables = db.tables;
+      incoming.history = db.history;
+      incoming.floorCalls = db.floorCalls;
+      incoming.payouts = db.payouts;
+      incoming.dealerRotation = db.dealerRotation;
+    }
+
+    for (const tableId of previousTableIds) {
+      if (!incoming.tables.some(table => table.id === tableId)) {
+        runDealerRotationOnTableClosed(incoming, tableId, dealerRotationTrigger);
+      }
+    }
+
+    repository.save(incoming);
+    syncDealerRotationAfterSave(repository.get(), dealerRotationTrigger);
+    const saved = repository.get();
+    if (saved.dealerRotation !== incoming.dealerRotation) {
+      repository.save(saved);
+    }
+    invalidateSnapshotCache();
+    notifyWsSideEffects();
+
+    res.json({
+      success: true,
+      message: "Database saved successfully",
+      lastModified: repository.get().meta.lastModified,
+      data: repository.get(),
+    });
+  });
+
+  app.post("/api/reset", licenseGuard, (_req, res) => {
+    const previousDb = repository.get();
+    const previousTableIds = new Set(previousDb.tables.map((table) => table.id));
+    const resetDb = repository.reset();
+    repository.registerExistingHistory(resetDb.history || []);
+
+    for (const tableId of previousTableIds) {
+      if (!resetDb.tables.some((table) => table.id === tableId)) {
+        runDealerRotationOnTableClosed(resetDb, tableId, dealerRotationTrigger);
+      }
+    }
+
+    syncDealerRotationAfterSave(resetDb, dealerRotationTrigger);
+    repository.save(resetDb);
+
+    invalidateSnapshotCache();
+    notifyWsSideEffects();
+    res.json({ success: true, data: repository.get(), message: "Database reset to factory defaults" });
+  });
+
+  app.post("/api/tournament/import", licenseGuard, (req, res) => {
+    const db = repository.get();
+    const previousTableIds = new Set(db.tables.map(table => table.id));
+    const built = buildDatabaseFromTournamentBackup(req.body);
+
+    if (built.ok === false) {
+      res.status(400).json({ success: false, error: built.error });
+      return;
+    }
+
+    const incoming = built.db;
+
+    for (const tableId of previousTableIds) {
+      if (!incoming.tables.some(table => table.id === tableId)) {
+        runDealerRotationOnTableClosed(incoming, tableId, dealerRotationTrigger);
+      }
+    }
+
+    repository.save(incoming);
+    syncDealerRotationAfterSave(repository.get(), dealerRotationTrigger);
+    const saved = repository.get();
+    if (saved.dealerRotation !== incoming.dealerRotation) {
+      repository.save(saved);
+    }
+    repository.registerExistingHistory(saved.history || []);
+    invalidateSnapshotCache();
+    notifyWsSideEffects();
+
+    res.json({
+      success: true,
+      data: saved,
+      message: "Tournament backup imported successfully",
+    });
+  });
+
+  app.get("/api/activity-log", licenseGuard, (_req, res) => {
+    res.type("text/plain").send(repository.getActivityLogContent());
+  });
+
+  app.get("/api/network/venue-display-url", (_req, res) => {
+    const path = "/display";
+    res.json({
+      path,
+      host: getPrimaryLocalAddress(),
+      port: PORT,
+      url: buildLocalUrl(PORT, path),
+      addresses: getLocalNetworkAddresses(),
+    });
+  });
+
+  app.get("/api/health", async (_req, res) => {
+    const postgresConfigured = Boolean(resolveDatabaseUrl());
+    const redis = await getRedisStatus();
+    const metrics = getMetricsSnapshot();
+    const snapshotCache = getSnapshotCacheStatus();
+    res.json({
+      ok: !isShuttingDown(),
+      uptimeMs: Math.round(process.uptime() * 1000),
+      persistence: repository.backend,
+      postgresConfigured,
+      readReplicaConfigured: Boolean(resolveDatabaseReadUrl()),
+      redis,
+      snapshotCache,
+      wsRpc: {
+        writesEnabled: isWsRpcWritesEnabled(),
+        methods: getRegisteredWsRpcMethods(),
+      },
+      metrics,
+      httpPort: PORT,
+      wsClients: socketHub?.getClientCount() ?? 0,
+      shuttingDown: isShuttingDown(),
+    });
+  });
+
+  app.post("/api/admin/shutdown", (req, res) => {
+    const remote = req.socket.remoteAddress ?? "";
+    const local = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+    if (!local) {
+      res.status(403).json({ error: "LOCAL_ONLY" });
+      return;
+    }
+
+    res.json({ ok: true, message: "Shutting down..." });
+    setTimeout(() => {
+      process.kill(process.pid, "SIGTERM");
+    }, 100).unref();
+  });
+
+  app.get("/api/admin/dashboard", async (req, res) => {
+    const remote = req.socket.remoteAddress ?? "";
+    const local = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+    if (!local) {
+      res.status(403).json({ error: "LOCAL_ONLY" });
+      return;
+    }
+
+    res.json(
+      buildAdminDashboardSnapshot(getDb(), {
+        uptimeMs: Math.round(process.uptime() * 1000),
+        persistence: repository.backend,
+        postgresConfigured: Boolean(resolveDatabaseUrl()),
+        readReplicaConfigured: Boolean(resolveDatabaseReadUrl()),
+        httpPort: PORT,
+        shuttingDown: isShuttingDown(),
+        wsClients: socketHub?.getClientCount() ?? 0,
+        phoneGraceCountFromPg:
+          repository instanceof PostgresRepository
+            ? await repository.countDealersInGrace().catch(() => null)
+            : null,
+      }),
+    );
+  });
+
+  app.use("/api/tracking", (req, res, next) => {
+    if (req.path === "/ping") {
+      next();
+      return;
+    }
+
+    licenseGuard(req, res, next);
+  }, createTrackingRouter(PORT, getDb));
+
+  app.use("/api/dealer", licenseGuard, createDealerRouter(PORT, getDb, setDb));
+  app.use("/api/dealer-control", licenseGuard, dealerControlRouter);
+  app.use("/api/floor", licenseGuard, createFloorRouter(PORT, getDb, setDb));
+  app.use("/api/settings", licenseGuard, createSettingsRouter(getDb, setDb));
+  app.use("/api/players", licenseGuard, createIdScanRouter());
+
+  registerLicenseRoutes(app);
+
+  await startServer(dealerControlRouter, dealerRotationTrigger);
+}
+
+bootstrap().catch(error => {
+  console.error("Server bootstrap failed:", error);
+  process.exit(1);
+});

@@ -5,14 +5,18 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useTournament } from "../useTournament";
-import { Play, Pause, RotateCcw, Volume2, VolumeX, Maximize2, Monitor, ArrowLeft, ArrowRight, ShieldAlert, CheckCircle2, SkipBack, SkipForward, Coffee, Check, X } from "lucide-react";
+import { Play, Pause, Volume2, VolumeX, Maximize2, Monitor, ArrowLeft, ArrowRight, CheckCircle2, SkipBack, SkipForward, Coffee, Check, X } from "lucide-react";
 import { BlindLevel, PayoutStructure } from "../types";
 import { DESIGN_HEIGHT, DESIGN_WIDTH, calcDisplayScale } from "../displaySettings";
+import { requestAppFullscreen } from "../dealer/useDealerKioskMode";
+import { getPlayingLevelNumber } from "../blindStructureUtils";
+import { calculateTimeToNextBreakLabel } from "../clockLive";
 import TrackingQrCode from "./TrackingQrCode";
 
 interface ClockViewProps {
   pendingFullscreen?: boolean;
   onFullscreenHandled?: () => void;
+  venueDisplay?: boolean;
 }
 
 type MilestoneOverlay = "bubble" | "final" | null;
@@ -21,6 +25,24 @@ const MILESTONE_ASSETS = {
   bubble: { image: "/bubbletime.png", audio: "/buble.mp3", label: "BUBBLE TIME" },
   final: { image: "/finaltable.png", audio: "/finaltable.mp3", label: "FINAL TABLE" },
 } as const;
+
+function formatTournamentStartTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+
+  const time = date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const datePart = date.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+
+  return `${time}, ${datePart}`;
+}
 
 const FINAL_TABLE_FALL_OBJECTS = [
   { src: "/image/obje1.png", isLarge: true, category: "trophy" as const },
@@ -132,7 +154,11 @@ function createFallParticles(
   });
 }
 
-export default function ClockView({ pendingFullscreen = false, onFullscreenHandled }: ClockViewProps) {
+export default function ClockView({
+  pendingFullscreen = false,
+  onFullscreenHandled,
+  venueDisplay = false,
+}: ClockViewProps) {
   const {
     state,
     startTimer,
@@ -141,13 +167,11 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
     setLevel,
     toggleSound,
     undoLastHistory,
-    resetDatabase
   } = useTournament();
 
   const { clock, settings, players, history, payouts, tables } = state;
   const [payoutIndex, setPayoutIndex] = useState(0);
   const [showPayoutModal, setShowPayoutModal] = useState(false);
-  const [showResetConfirm, setShowResetConfirm] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [payoutOffset, setPayoutOffset] = useState(0);
@@ -156,14 +180,14 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
   const [displayScale, setDisplayScale] = useState(1);
 
   const updateDisplayScale = useCallback(() => {
-    const isActive = document.fullscreenElement === containerRef.current;
+    const isActive = venueDisplay || document.fullscreenElement === containerRef.current;
     setIsDisplayFullscreen(isActive);
     if (isActive) {
       setDisplayScale(calcDisplayScale(window.innerWidth, window.innerHeight));
     } else {
       setDisplayScale(1);
     }
-  }, []);
+  }, [venueDisplay]);
 
   // Resume/Unlock Audio Context on user click anywhere
   useEffect(() => {
@@ -392,16 +416,11 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
   };
 
   let nextLevel = settings.blindStructure[clock.currentLevelIndex + 1] || null;
-  if (nextLevel && nextLevel.isBreak) {
-    let foundNonBreak = null;
-    for (let i = clock.currentLevelIndex + 2; i < settings.blindStructure.length; i++) {
-      if (!settings.blindStructure[i].isBreak) {
-        foundNonBreak = settings.blindStructure[i];
-        break;
-      }
-    }
-    nextLevel = foundNonBreak;
-  }
+
+  const activePlayingLevel = getPlayingLevelNumber(settings.blindStructure, clock.currentLevelIndex);
+  const nextPlayingLevelNumber = nextLevel && !nextLevel.isBreak
+    ? getPlayingLevelNumber(settings.blindStructure, clock.currentLevelIndex + 1)
+    : null;
 
   // Format MM:SS
   const formatTime = (secs: number) => {
@@ -420,6 +439,9 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
 
   // Elapsed time formatter
   const formattedElapsed = formatHHMMSS(clock.elapsedTime);
+  const formattedStartTime = clock.tournamentStartedAt
+    ? formatTournamentStartTime(clock.tournamentStartedAt)
+    : "Not started";
 
   // Remaining playing players
   const totalPlayers = players.length;
@@ -651,22 +673,8 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
   const bigBlind = activeLevel.bigBlind || 1;
   const averageBB = Math.round(averageStack / bigBlind);
 
-  // Time remaining on next break calculation
-  const calculateTimeToNextBreak = () => {
-    let secs = 0;
-    // Sum remaining time of current level
-    secs += clock.timeRemaining;
-    
-    // Sum times of upcoming levels until a break is found
-    for (let i = clock.currentLevelIndex + 1; i < settings.blindStructure.length; i++) {
-      const lvl = settings.blindStructure[i];
-      if (lvl.isBreak) {
-        break;
-      }
-      secs += lvl.duration * 60;
-    }
-    return formatHHMMSS(secs);
-  };
+  // Time remaining on next break calculation (shared with dealer / tracking live feed)
+  const nextBreakDisplay = calculateTimeToNextBreakLabel(settings, clock);
 
   const levelsUntilBreak = () => {
     let count = 0;
@@ -680,10 +688,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
     return count;
   };
 
-  const currentStandardLevel = settings.blindStructure
-    .slice(0, clock.currentLevelIndex + 1)
-    .filter(l => !l.isBreak)
-    .pop()?.level || 1;
+  const currentStandardLevel = activePlayingLevel;
 
   const isLateRegOpen = currentStandardLevel <= (settings.lateRegLevel ?? 7);
 
@@ -775,7 +780,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
   }, [updateDisplayScale]);
 
   useEffect(() => {
-    if (!pendingFullscreen) return;
+    if (!pendingFullscreen || venueDisplay) return;
     const timer = window.setTimeout(() => {
       containerRef.current?.requestFullscreen().catch((err) => {
         console.error(`Error enabling display fullscreen: ${err.message}`);
@@ -783,7 +788,18 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
       onFullscreenHandled?.();
     }, 150);
     return () => window.clearTimeout(timer);
-  }, [pendingFullscreen, onFullscreenHandled]);
+  }, [pendingFullscreen, onFullscreenHandled, venueDisplay]);
+
+  useEffect(() => {
+    if (!venueDisplay) return;
+    updateDisplayScale();
+    const timer = window.setTimeout(() => {
+      void requestAppFullscreen().catch(() => {
+        // Smart TV browsers often block fullscreen — CSS venue scaling still applies.
+      });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [venueDisplay, updateDisplayScale]);
 
   // Scroll payouts carousel by page of 14
   const nextPayout = () => {
@@ -804,8 +820,12 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
     }
   };
 
-  // Keyboard Space key toggles pause/play
+  // Keyboard Space key toggles pause/play (director clock only)
   useEffect(() => {
+    if (venueDisplay) {
+      return;
+    }
+
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (
@@ -829,7 +849,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [clock.isRunning, startTimer, pauseTimer]);
+  }, [clock.isRunning, startTimer, pauseTimer, venueDisplay]);
 
   const payoutPageCount = Math.ceil(payouts.length / PAYOUTS_PER_PAGE);
   const visiblePayouts = payouts.slice(payoutOffset, payoutOffset + PAYOUTS_PER_PAGE);
@@ -929,7 +949,9 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
         <div className="flex items-center gap-4 text-[15px] font-mono shrink-0">
           <div className="text-right">
             <p className="text-[11.25px] text-zinc-500 uppercase leading-none">START TIME</p>
-            <p className="font-bold text-zinc-400 text-[15px] mt-0.5">14:00, May 26, 2025</p>
+            <p className={`font-bold text-[15px] mt-0.5 ${clock.tournamentStartedAt ? "text-zinc-400" : "text-zinc-600"}`}>
+              {formattedStartTime}
+            </p>
           </div>
           <div className="text-right border-l border-zinc-800 pl-3">
             <p className="text-[11.25px] text-zinc-500 uppercase leading-none">ELAPSED TIME</p>
@@ -944,6 +966,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
         </div>
 
         {/* Top Control Action Buttons */}
+        {!venueDisplay && (
         <div className="flex items-center gap-1.5 border-l border-zinc-800 pl-3 opacity-10 hover:opacity-100 focus-within:opacity-100 transition-all duration-300 shrink-0">
           <button 
             id="sound-toggle-btn"
@@ -956,15 +979,6 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
             {clock.soundEnabled ? <Volume2 className="w-3.5 h-3.5 text-emerald-400" /> : <VolumeX className="w-3.5 h-3.5 text-red-400" />}
           </button>
           <button 
-            id="reset-db-btn"
-            onClick={() => setShowResetConfirm(true)}
-            className="p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-600 transition text-zinc-300 hover:text-zinc-100"
-            title="Reset Tournament Data to Defaults"
-            aria-label="Reset tournament data to defaults"
-          >
-            <RotateCcw className="w-3.5 h-3.5 text-blue-400" />
-          </button>
-          <button 
             id="fullscreen-toggle-btn"
             onClick={toggleFullscreen}
             className="p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-600 transition text-zinc-300 hover:text-zinc-100"
@@ -973,6 +987,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
             <Maximize2 className="w-3.5 h-3.5" />
           </button>
         </div>
+        )}
       </div>
 
       {/* Main Grid Content */}
@@ -1220,7 +1235,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
                 className="font-black uppercase tracking-widest font-mono mb-1 transition-colors duration-500 text-[11px] sm:text-[13px] lg:text-[17px]"
                 style={{ color: activeColor }}
               >
-                {activeLevel.isBreak ? "BREAK" : `LEVEL ${activeLevel.level}`}
+                {activeLevel.isBreak ? "BREAK" : `LEVEL ${activePlayingLevel}`}
               </span>
               
               <h1 className="text-4xl sm:text-5xl lg:text-[78px] font-black font-mono tracking-tighter text-zinc-100 select-all leading-none py-1.5 sm:py-2">
@@ -1248,6 +1263,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
           </div>
 
           {/* TIMER CONTROL ACTIONS ROW */}
+          {!venueDisplay && (
           <div className="relative z-10 flex items-center justify-center gap-4 mt-6 opacity-0 hover:opacity-100 focus-within:opacity-100 transition-all duration-300 min-h-[56px]">
             {/* Level Backward */}
             <button
@@ -1294,6 +1310,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
               <SkipForward className="w-4 h-4" />
             </button>
           </div>
+          )}
 
         </div>
 
@@ -1310,7 +1327,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
               <div className="my-auto space-y-3">
                 <div>
                   <p className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest mb-1">
-                    {nextLevel.isBreak ? "BREAK TIME" : `LEVEL ${nextLevel.level}`}
+                    {nextLevel.isBreak ? "BREAK TIME" : `LEVEL ${nextPlayingLevelNumber ?? getPlayingLevelNumber(settings.blindStructure, clock.currentLevelIndex + 1)}`}
                   </p>
                   <p className="text-3xl md:text-4xl font-black font-mono tracking-tight text-zinc-100">
                     {nextLevel.isBreak ? `${nextLevel.duration} MIN` : `${nextLevel.smallBlind.toLocaleString()} / ${nextLevel.bigBlind.toLocaleString()}`}
@@ -1349,7 +1366,7 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
                 <div className="w-full bg-zinc-950 h-2.5 rounded-full overflow-hidden mb-2 border border-zinc-850">
                   <div className="bg-amber-500 h-full rounded-full transition-all duration-1000" style={{ width: `${nextBreakProgressPercent}%` }}></div>
                 </div>
-                <p className="text-xl font-black font-mono tracking-tight text-zinc-100">{calculateTimeToNextBreak()}</p>
+                <p className="text-xl font-black font-mono tracking-tight text-zinc-100">{nextBreakDisplay}</p>
               </div>
             </div>
 
@@ -1558,7 +1575,9 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
                       ) : lvl.isBreak ? (
                         <Coffee className="w-4 h-4" />
                       ) : (
-                        <span className="text-[15px] font-black font-mono">{lvl.level}</span>
+                        <span className="text-[15px] font-black font-mono">
+                          {getPlayingLevelNumber(settings.blindStructure, originalIndex)}
+                        </span>
                       )}
                     </div>
 
@@ -1654,49 +1673,6 @@ export default function ClockView({ pendingFullscreen = false, onFullscreenHandl
       )}
 
       {/* Payout Modal / Popover */}
-      {showResetConfirm && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative space-y-4">
-            <button
-              onClick={() => setShowResetConfirm(false)}
-              className="absolute top-4 right-4 text-zinc-400 hover:text-white transition"
-              aria-label="Close reset confirmation"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            <div className="flex items-center gap-3 text-red-500">
-              <ShieldAlert className="w-6 h-6 shrink-0" />
-              <h3 className="text-lg font-black uppercase tracking-wider text-zinc-100">
-                Reset Tournament?
-              </h3>
-            </div>
-
-            <p className="text-sm text-zinc-300 leading-relaxed font-medium">
-              This will permanently reset all tournament data to defaults, including players, tables, blinds, payouts, and timer progress. This action cannot be undone.
-            </p>
-
-            <div className="flex items-center justify-end gap-3 pt-2">
-              <button
-                onClick={() => setShowResetConfirm(false)}
-                className="px-4 py-2 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 text-xs font-bold uppercase rounded-xl tracking-wider transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  resetDatabase();
-                  setShowResetConfirm(false);
-                }}
-                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-black uppercase rounded-xl tracking-wider transition"
-              >
-                Yes, Reset
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {showPayoutModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-zinc-900 rounded-2xl border border-zinc-800 p-6 max-w-xl w-full max-h-[80vh] flex flex-col">

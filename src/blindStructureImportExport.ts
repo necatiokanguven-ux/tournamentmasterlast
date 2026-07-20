@@ -8,31 +8,22 @@ import { BlindLevel } from "./types";
 
 const HEADER_ALIASES: Record<string, keyof BlindLevel | "type"> = {
   level: "level",
-  seviye: "level",
   "level no": "level",
   "level #": "level",
   sb: "smallBlind",
   "small blind": "smallBlind",
   "small": "smallBlind",
-  "kucuk": "smallBlind",
-  "küçük": "smallBlind",
   bb: "bigBlind",
   "big blind": "bigBlind",
   "big": "bigBlind",
-  "buyuk": "bigBlind",
-  "büyük": "bigBlind",
   ante: "ante",
   duration: "duration",
   time: "duration",
   minutes: "duration",
   min: "duration",
-  dakika: "duration",
-  sure: "duration",
-  "süre": "duration",
   "duration (min)": "duration",
   type: "type",
   break: "type",
-  tur: "type",
 };
 
 function normalizeHeader(value: unknown): string {
@@ -50,8 +41,8 @@ function parseNumber(value: unknown, fallback = 0): number {
 
 function isBreakRow(row: Record<string, unknown>, mapped: Partial<Record<keyof BlindLevel | "type", unknown>>): boolean {
   const typeValue = String(mapped.type ?? row.type ?? "").trim().toLowerCase();
-  if (["break", "mola", "pause", "ara"].includes(typeValue)) return true;
-  if (typeValue === "level" || typeValue === "seviye") return false;
+  if (["break", "pause"].includes(typeValue)) return true;
+  if (typeValue === "level") return false;
 
   const sb = parseNumber(mapped.smallBlind);
   const bb = parseNumber(mapped.bigBlind);

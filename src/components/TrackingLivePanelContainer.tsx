@@ -2,6 +2,7 @@ import React from "react";
 import TrackingLivePanel from "./TrackingLivePanel";
 import TrackingMilestoneAlerts from "./TrackingMilestoneAlerts";
 import { useTrackingLivePoll } from "../tracking/useTrackingLivePoll";
+import { useInterpolatedTrackingLiveState } from "../tracking/useInterpolatedTrackingLiveState";
 import type { PlayerStatus } from "../types";
 import { isTrackingActivePlayer } from "../tracking/playerStatus";
 import type { TrackingLocale, TrackingTranslations } from "../tracking/translations";
@@ -18,9 +19,10 @@ export default function TrackingLivePanelContainer({
   playerStatus,
 }: TrackingLivePanelContainerProps) {
   const { liveState, error } = useTrackingLivePoll(true);
+  const displayLiveState = useInterpolatedTrackingLiveState(liveState);
   const showFinalTableCongrats = isTrackingActivePlayer(playerStatus);
 
-  if (!liveState) {
+  if (!displayLiveState) {
     return (
       <section
         className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5 min-h-[420px]"
@@ -34,12 +36,12 @@ export default function TrackingLivePanelContainer({
     <>
       <TrackingMilestoneAlerts
         t={t}
-        isBubbleTime={liveState.isBubbleTime}
-        isFinalTable={liveState.isFinalTable}
-        playersToItm={liveState.playersToItm}
+        isBubbleTime={displayLiveState.isBubbleTime}
+        isFinalTable={displayLiveState.isFinalTable}
+        playersToItm={displayLiveState.playersToItm}
         showFinalTableCongrats={showFinalTableCongrats}
       />
-      <TrackingLivePanel liveState={liveState} t={t} />
+      <TrackingLivePanel liveState={displayLiveState} t={t} />
       {error && <p className="text-sm text-red-300">{error}</p>}
     </>
   );

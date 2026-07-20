@@ -5,6 +5,7 @@
 
 import { useState, useEffect } from 'react';
 import { tournamentStore, AppState } from './store';
+import type { DealerTimerModeSetting } from './types';
 
 export function useTournament() {
   const [state, setState] = useState<AppState>(tournamentStore.getState());
@@ -65,12 +66,20 @@ export function useTournament() {
     // Utility / Logs
     undoLastHistory: () => tournamentStore.undoLastHistory(),
     undoTableAction: () => tournamentStore.undoTableAction(),
+    undoTableActions: (selectedIds: string[]) => tournamentStore.undoTableActions(selectedIds),
     getTableUndoCount: () => tournamentStore.getTableUndoStackSize(),
+    getTableUndoEntries: () => tournamentStore.getTableUndoEntries(),
     getWaitingListPlayers: () => tournamentStore.getWaitingListPlayers(),
     saveFloorTeams: (teams: Parameters<typeof tournamentStore.saveFloorTeams>[0]) =>
       tournamentStore.saveFloorTeams(teams),
-    saveDealerTimers: (callTimeSeconds: number, playerTimeSeconds: number) =>
-      tournamentStore.saveDealerTimers(callTimeSeconds, playerTimeSeconds),
-    resetDatabase: () => tournamentStore.reset()
+    saveDealerZones: (zones: Parameters<typeof tournamentStore.saveDealerZones>[0]) =>
+      tournamentStore.saveDealerZones(zones),
+    saveDealerTimers: (
+      timerMode: DealerTimerModeSetting,
+      callTimeSeconds: number,
+      playerTimeSeconds: number,
+    ) => tournamentStore.saveDealerTimers(timerMode, callTimeSeconds, playerTimeSeconds),
+    resetDatabase: () => tournamentStore.reset(),
+    importTournamentBackup: (payload: unknown) => tournamentStore.importTournamentBackup(payload),
   };
 }

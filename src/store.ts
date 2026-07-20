@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Player, Table, TournamentSettings, ClockState, HistoryEvent, BlindLevel, PayoutStructure, FloorTeam } from "./types";
+import { Player, Table, TournamentSettings, ClockState, HistoryEvent, BlindLevel, PayoutStructure, FloorTeam, DealerZone, DealerTimerModeSetting, MAX_TABLE_SEATS } from "./types";
 import { localApi } from "./config/api";
+import { simulateTableUndoActions } from "./server/tableUndoEngine";
+import type { ClockChannelPayload } from "./websocket/clockChannelTypes";
 
 export interface AppState {
   settings: TournamentSettings;
@@ -22,6 +24,18 @@ interface TableUndoSnapshot {
   history: HistoryEvent[];
 }
 
+export interface TableUndoEntrySummary {
+  id: string;
+  timestamp: string;
+  description: string;
+  type: HistoryEvent["type"];
+}
+
+interface TableUndoEntry extends TableUndoEntrySummary {
+  before: TableUndoSnapshot;
+  after: TableUndoSnapshot;
+}
+
 const MAX_TABLE_UNDO_STACK = 50;
 
 // Custom simple event emitter for React components to subscribe to store updates
@@ -30,7 +44,7 @@ class Store {
   private state!: AppState;
   private listeners: Set<Listener> = new Set();
   private timerId: any = null;
-  private tableUndoStack: TableUndoSnapshot[] = [];
+  private tableUndoStack: TableUndoEntry[] = [];
   private isApplyingTableUndo = false;
   private hasLoadedFromServer = false;
   private sessionDirty = false;
@@ -38,6 +52,7 @@ class Store {
   private debouncedPersistTimer: ReturnType<typeof setTimeout> | null = null;
   private lastServerModified = 0;
   private serverSyncTimer: ReturnType<typeof setInterval> | null = null;
+  private clockSyncActive = false;
 
   constructor() {
     this.state = this.getInitialState();
@@ -68,7 +83,9 @@ class Store {
         currentDay: 2,
         dealerCallTimeSeconds: 30,
         dealerPlayerTimeSeconds: 60,
+        dealerTimerMode: "call_time",
         floorTeams: [],
+        dealerZones: [],
       },
       clock: {
         currentLevelIndex: 0,
@@ -76,7 +93,9 @@ class Store {
         isRunning: false,
         elapsedTime: 0,
         soundEnabled: true,
-        fullscreen: false
+        fullscreen: false,
+        syncedAtMs: null,
+        tournamentStartedAt: null,
       },
       players: [],
       tables: [],
@@ -109,6 +128,10 @@ class Store {
           ...team,
           tableNumbers: [...team.tableNumbers],
         })),
+        dealerZones: (state.settings.dealerZones ?? []).map(zone => ({
+          ...zone,
+          tableNumbers: [...zone.tableNumbers],
+        })),
       },
       clock: { ...state.clock },
       players: state.players.map(player => ({ ...player })),
@@ -118,15 +141,24 @@ class Store {
     };
   }
 
-  private enqueuePersist(snapshot: AppState = this.cloneAppState()) {
+  private cancelDebouncedPersist() {
+    if (this.debouncedPersistTimer) {
+      clearTimeout(this.debouncedPersistTimer);
+      this.debouncedPersistTimer = null;
+    }
+  }
+
+  private enqueuePersist() {
     this.saveChain = this.saveChain
-      .then(() => this.persistSnapshot(snapshot))
+      .then(() => this.persistSnapshot())
       .catch(error => {
         console.error("Failed to save data to backend", error);
       });
   }
 
-  private async persistSnapshot(snapshot: AppState) {
+  private async persistSnapshot() {
+    const snapshot = this.cloneAppState();
+    snapshot.clock.syncedAtMs = Date.now();
     const response = await fetch(localApi("/api/save"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -141,15 +173,50 @@ class Store {
 
       if (data.data?.players) {
         const keepLocalClock = this.state.clock.isRunning;
-        const localClock = { ...this.state.clock };
-        this.applyServerPayload(data.data);
-        if (keepLocalClock) {
-          this.state.clock = localClock;
-        }
+        this.applyServerPayload(data.data, { preserveRunningClock: keepLocalClock });
       }
 
       this.sessionDirty = false;
     }
+  }
+
+  private async pushClockSync() {
+    if (!this.state.clock.isRunning) {
+      return;
+    }
+
+    const syncedAtMs = Date.now();
+    this.state.clock.syncedAtMs = syncedAtMs;
+
+    try {
+      await fetch(localApi("/api/clock/sync"), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentLevelIndex: this.state.clock.currentLevelIndex,
+          timeRemaining: this.state.clock.timeRemaining,
+          isRunning: this.state.clock.isRunning,
+          elapsedTime: this.state.clock.elapsedTime,
+          syncedAtMs,
+          tournamentStartedAt: this.state.clock.tournamentStartedAt ?? null,
+        }),
+      });
+    } catch (error) {
+      console.warn("Failed to sync tournament clock to server", error);
+    }
+  }
+
+  private startClockSyncPush() {
+    if (this.clockSyncActive) {
+      return;
+    }
+
+    this.clockSyncActive = true;
+    void this.pushClockSync();
+  }
+
+  private stopClockSyncPush() {
+    this.clockSyncActive = false;
   }
 
   private scheduleDebouncedPersist() {
@@ -193,14 +260,18 @@ class Store {
       currentDay: data?.currentDay ?? 1,
       dealerCallTimeSeconds: data?.dealerCallTimeSeconds ?? 30,
       dealerPlayerTimeSeconds: data?.dealerPlayerTimeSeconds ?? 60,
+      dealerTimerMode: data?.dealerTimerMode ?? "call_time",
       floorTeams: data?.floorTeams ?? [],
+      dealerZones: data?.dealerZones ?? [],
     } as TournamentSettings;
   }
 
-  private applyServerPayload(data: any) {
+  private applyServerPayload(data: any, options?: { preserveRunningClock?: boolean }) {
     const settings = this.normalizeLoadedSettings(data.settings);
     const { players, tables } = this.sanitizeLoadedPlayers(data.players || [], data.tables || []);
     const wasRunning = this.state.clock.isRunning;
+    const preserveRunningClock = Boolean(options?.preserveRunningClock && this.state.clock.isRunning);
+    const runningClockSnapshot = preserveRunningClock ? { ...this.state.clock } : null;
 
     this.state = {
       settings,
@@ -218,10 +289,16 @@ class Store {
     this.reconcileTableSeats();
     this.lastServerModified = data.meta?.lastModified ?? this.lastServerModified;
 
+    if (runningClockSnapshot) {
+      this.state.clock = runningClockSnapshot;
+    }
+
     if (this.state.clock.isRunning && !wasRunning) {
       this.startTimerInternal();
     } else if (!this.state.clock.isRunning && wasRunning) {
       this.stopTimerInternal();
+    } else if (this.state.clock.isRunning) {
+      this.startClockSyncPush();
     }
 
     this.notify();
@@ -253,21 +330,44 @@ class Store {
       if (!data?.players) return;
 
       const keepLocalClock = this.state.clock.isRunning;
-      const localClock = { ...this.state.clock };
 
-      this.applyServerPayload(data);
-
-      if (keepLocalClock) {
-        this.state.clock = localClock;
-      }
+      this.cancelDebouncedPersist();
+      this.applyServerPayload(data, { preserveRunningClock: keepLocalClock });
 
       this.lastServerModified = remoteModified;
-      if (!keepLocalClock) {
-        this.sessionDirty = false;
-      }
+      this.sessionDirty = false;
     } catch (error) {
       console.warn("Failed to sync tournament data from server", error);
     }
+  }
+
+  /**
+   * Apply clock state from WebSocket `clock` channel (Phase 5A).
+   * Skips when this browser is actively driving the clock (director).
+   */
+  public applyRemoteClock(remote: ClockChannelPayload): void {
+    if (this.state.clock.isRunning) {
+      return;
+    }
+
+    const wasRunning = this.state.clock.isRunning;
+    this.state.clock = {
+      ...this.state.clock,
+      currentLevelIndex: remote.currentLevelIndex,
+      timeRemaining: remote.timeRemaining,
+      isRunning: remote.isRunning,
+      elapsedTime: remote.elapsedTime,
+      syncedAtMs: remote.syncedAtMs ?? Date.now(),
+      tournamentStartedAt: remote.tournamentStartedAt ?? this.state.clock.tournamentStartedAt ?? null,
+    };
+
+    if (this.state.clock.isRunning && !wasRunning) {
+      this.startTimerInternal();
+    } else if (!this.state.clock.isRunning && wasRunning) {
+      this.stopTimerInternal();
+    }
+
+    this.notify();
   }
 
   public async saveFloorTeams(teams: FloorTeam[]) {
@@ -292,11 +392,37 @@ class Store {
     this.notify();
   }
 
-  public async saveDealerTimers(callTimeSeconds: number, playerTimeSeconds: number) {
+  public async saveDealerZones(zones: DealerZone[]) {
+    const res = await fetch(localApi("/api/settings/dealer-zones"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ zones }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.message || data.error || "Failed to save dealer zones.");
+    }
+
+    this.state = {
+      ...this.state,
+      settings: {
+        ...this.state.settings,
+        dealerZones: data.zones ?? zones,
+      },
+    };
+    this.lastServerModified = data.version ?? this.lastServerModified;
+    this.notify();
+  }
+
+  public async saveDealerTimers(
+    timerMode: DealerTimerModeSetting,
+    callTimeSeconds: number,
+    playerTimeSeconds: number,
+  ) {
     const res = await fetch(localApi("/api/settings/dealer-timers"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ callTimeSeconds, playerTimeSeconds }),
+      body: JSON.stringify({ timerMode, callTimeSeconds, playerTimeSeconds }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -307,6 +433,7 @@ class Store {
       ...this.state,
       settings: {
         ...this.state.settings,
+        dealerTimerMode: data.timerMode,
         dealerCallTimeSeconds: data.callTimeSeconds,
         dealerPlayerTimeSeconds: data.playerTimeSeconds,
       },
@@ -336,8 +463,14 @@ class Store {
     try {
       await this.flushPendingSaves();
       const res = await fetch(localApi("/api/data"));
+      if (res.status === 403) {
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(`Failed to load tournament data (${res.status})`);
+      }
       const data = await res.json();
-      if (data && data.players) {
+      if (data && Array.isArray(data.players)) {
         if (this.sessionDirty && !options?.force) {
           this.hasLoadedFromServer = true;
           return;
@@ -375,33 +508,72 @@ class Store {
   // Reset database
   public async reset() {
     try {
+      this.cancelDebouncedPersist();
+      this.saveChain = Promise.resolve();
+      this.sessionDirty = false;
+
       const res = await fetch(localApi("/api/reset"), { method: "POST" });
       const resData = await res.json();
-      if (resData.success && resData.data) {
-        const data = resData.data;
-        const settings = this.normalizeLoadedSettings(data.settings);
-        this.state = {
-          settings,
-          clock: {
-            ...data.clock,
-            soundEnabled: data.clock?.soundEnabled ?? true,
-          },
-          players: data.players,
-          tables: data.tables,
-          history: data.history || [],
-          payouts: data.payouts && data.payouts.length > 0 ? data.payouts : this.calculatePayouts(settings, data.players)
-        };
-        this.reconcileTableSeats();
-        this.stopTimerInternal();
-        this.clearTableUndoStack();
-        this.hasLoadedFromServer = true;
-        this.lastServerModified = data.meta?.lastModified ?? Date.now();
-        this.startServerSync();
-        this.emit();
+      if (!res.ok || !resData.success || !resData.data) {
+        throw new Error(resData.message || resData.error || "Failed to reset tournament.");
       }
+      this.applyImportedDatabase(resData.data);
     } catch (e) {
       console.error("Failed to reset database", e);
+      throw e;
     }
+  }
+
+  public async importTournamentBackup(payload: unknown): Promise<void> {
+    try {
+      this.cancelDebouncedPersist();
+      this.saveChain = Promise.resolve();
+      this.sessionDirty = false;
+
+      const res = await fetch(localApi("/api/tournament/import"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const resData = await res.json();
+      if (!res.ok || !resData.success || !resData.data) {
+        throw new Error(resData.error || resData.message || "Tournament import failed.");
+      }
+      this.applyImportedDatabase(resData.data);
+    } catch (e) {
+      console.error("Failed to import tournament backup", e);
+      throw e;
+    }
+  }
+
+  private applyImportedDatabase(data: any) {
+    this.cancelDebouncedPersist();
+    this.saveChain = Promise.resolve();
+
+    const settings = this.normalizeLoadedSettings(data.settings);
+    const { players, tables } = this.sanitizeLoadedPlayers(data.players || [], data.tables || []);
+    this.state = {
+      settings,
+      clock: {
+        ...data.clock,
+        soundEnabled: data.clock?.soundEnabled ?? true,
+      },
+      players,
+      tables,
+      history: data.history || [],
+      payouts: data.payouts && data.payouts.length > 0 ? data.payouts : this.calculatePayouts(settings, players),
+    };
+    this.reconcileTableSeats();
+    this.stopTimerInternal();
+    this.clearTableUndoStack();
+    this.hasLoadedFromServer = true;
+    this.lastServerModified = data.meta?.lastModified ?? Date.now();
+    this.sessionDirty = false;
+    this.startServerSync();
+    if (this.state.clock.isRunning) {
+      this.startTimerInternal();
+    }
+    this.notify();
   }
 
   // Payout calculation
@@ -453,6 +625,9 @@ class Store {
   // --- Clock Methods ---
   public startTimer() {
     if (this.state.clock.isRunning) return;
+    if (!this.state.clock.tournamentStartedAt) {
+      this.state.clock.tournamentStartedAt = new Date().toISOString();
+    }
     this.state.clock.isRunning = true;
     this.startTimerInternal();
     this.addLog('clock', 'Tournament clock started');
@@ -464,12 +639,15 @@ class Store {
     this.timerId = setInterval(() => {
       this.tick();
     }, 1000);
+    this.startClockSyncPush();
   }
 
   public pauseTimer() {
     if (!this.state.clock.isRunning) return;
     this.state.clock.isRunning = false;
     this.stopTimerInternal();
+    this.state.clock.syncedAtMs = Date.now();
+    void this.pushClockSync();
     this.addLog('clock', 'Tournament clock paused');
     this.emit();
   }
@@ -479,6 +657,7 @@ class Store {
       clearInterval(this.timerId);
       this.timerId = null;
     }
+    this.stopClockSyncPush();
   }
 
   private tick() {
@@ -525,9 +704,12 @@ class Store {
     }
 
     if (levelChanged) {
+      this.state.clock.syncedAtMs = Date.now();
+      void this.pushClockSync();
       this.emit();
     } else {
       this.emitDebounced();
+      void this.pushClockSync();
     }
   }
 
@@ -535,6 +717,8 @@ class Store {
     let newTime = this.state.clock.timeRemaining + seconds;
     if (newTime < 0) newTime = 0;
     this.state.clock.timeRemaining = newTime;
+    this.state.clock.syncedAtMs = Date.now();
+    void this.pushClockSync();
     const direction = seconds >= 0 ? "added" : "removed";
     this.addLog('clock', `Clock time ${direction}: ${Math.abs(seconds)} seconds`);
     this.emit();
@@ -545,6 +729,8 @@ class Store {
     if (index >= 0 && index < structure.length) {
       this.state.clock.currentLevelIndex = index;
       this.state.clock.timeRemaining = structure[index].duration * 60;
+      this.state.clock.syncedAtMs = Date.now();
+      void this.pushClockSync();
       this.addLog('level', `Level manually changed to Level ${structure[index].isBreak ? 'Break' : structure[index].level}`);
       this.emit();
     }
@@ -615,9 +801,8 @@ class Store {
     const player = this.state.players.find(p => p.id === id);
     if (!player) return;
 
-    this.pushTableUndoSnapshot();
-
     const playerName = `${player.firstName} ${player.lastName}`;
+    const undoBefore = this.beginTableUndoEntry();
 
     this.state = {
       ...this.state,
@@ -634,6 +819,7 @@ class Store {
       : this.calculatePayouts(this.state.settings, this.state.players);
 
     this.addLog('move', `Removed player from tournament: ${playerName}`, id, playerName);
+    this.commitTableUndoEntry(undoBefore, `Removed player from tournament: ${playerName}`, "move");
     this.emit();
   }
 
@@ -759,13 +945,40 @@ class Store {
     };
   }
 
-  private pushTableUndoSnapshot() {
-    if (this.isApplyingTableUndo) return;
+  private beginTableUndoEntry(): TableUndoSnapshot | null {
+    if (this.isApplyingTableUndo) return null;
+    return this.createTableUndoSnapshot();
+  }
 
-    this.tableUndoStack.push(this.createTableUndoSnapshot());
+  private commitTableUndoEntry(
+    before: TableUndoSnapshot | null,
+    description: string,
+    type: HistoryEvent["type"],
+  ) {
+    if (!before) return;
+
+    this.tableUndoStack.push({
+      id: `tu-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: new Date().toISOString(),
+      description,
+      type,
+      before,
+      after: this.createTableUndoSnapshot(),
+    });
+
     if (this.tableUndoStack.length > MAX_TABLE_UNDO_STACK) {
       this.tableUndoStack.shift();
     }
+  }
+
+  private applyTableUndoSnapshot(snapshot: TableUndoSnapshot) {
+    this.state = {
+      ...this.state,
+      players: snapshot.players.map(player => ({ ...player })),
+      tables: snapshot.tables.map(table => ({ ...table, seats: [...table.seats] })),
+      payouts: snapshot.payouts.map(payout => ({ ...payout })),
+      history: snapshot.history.map(event => ({ ...event })),
+    };
   }
 
   private clearTableUndoStack() {
@@ -776,20 +989,57 @@ class Store {
     return this.tableUndoStack.length;
   }
 
-  public undoTableAction() {
-    const snapshot = this.tableUndoStack.pop();
-    if (!snapshot) return;
+  public getTableUndoEntries(): TableUndoEntrySummary[] {
+    return [...this.tableUndoStack]
+      .reverse()
+      .map(({ id, timestamp, description, type }) => ({ id, timestamp, description, type }));
+  }
+
+  public undoTableActions(selectedIds: string[]) {
+    if (selectedIds.length === 0 || this.tableUndoStack.length === 0) return;
+
+    const selected = new Set(selectedIds);
+    const simulation = simulateTableUndoActions(
+      this.tableUndoStack,
+      selectedIds,
+      {
+        players: this.state.players,
+        tables: this.state.tables,
+        payouts: this.state.payouts,
+      },
+    );
+
+    if (simulation.ok === false) {
+      throw new Error(simulation.error);
+    }
 
     this.isApplyingTableUndo = true;
     this.state = {
       ...this.state,
-      players: snapshot.players.map(player => ({ ...player })),
-      tables: snapshot.tables.map(table => ({ ...table, seats: [...table.seats] })),
-      payouts: snapshot.payouts.map(payout => ({ ...payout })),
-      history: snapshot.history.map(event => ({ ...event })),
+      players: simulation.state.players.map(player => ({ ...player })),
+      tables: simulation.state.tables.map(table => ({ ...table, seats: [...table.seats] })),
     };
+    this.syncSeatsAfterPlayerChange();
+    this.state.payouts = this.state.payouts && this.state.payouts.length > 0
+      ? this.updatePayoutAmounts(this.state.settings, this.state.players, this.state.payouts)
+      : this.calculatePayouts(this.state.settings, this.state.players);
+    this.tableUndoStack = this.tableUndoStack.filter(entry => !selected.has(entry.id));
     this.isApplyingTableUndo = false;
+
+    const count = selectedIds.length;
+    this.addLog(
+      "undo",
+      count === 1
+        ? "Undid 1 selected table action"
+        : `Undid ${count} selected table actions`,
+    );
     this.emit();
+  }
+
+  public undoTableAction() {
+    const latest = this.tableUndoStack[this.tableUndoStack.length - 1];
+    if (!latest) return;
+    this.undoTableActions([latest.id]);
   }
 
   // --- Table Manager & Waiting List ---
@@ -798,23 +1048,24 @@ class Store {
       ? Math.max(...this.state.tables.map(t => t.number)) + 1 
       : 1;
 
-    this.pushTableUndoSnapshot();
+    const undoBefore = this.beginTableUndoEntry();
 
     const newTable: Table = {
       id: `table-${Date.now()}`,
       number: nextNum,
       dealerSeatIndex: 0,
-      seats: Array(10).fill(null)
+      seats: Array(MAX_TABLE_SEATS).fill(null)
     };
     this.state.tables.push(newTable);
     this.addLog('balance', `Created Table ${nextNum}`);
+    this.commitTableUndoEntry(undoBefore, `Created Table ${nextNum}`, "balance");
     this.emit();
   }
 
   public deleteTable(tableId: string) {
     const table = this.state.tables.find(t => t.id === tableId);
     if (table) {
-      this.pushTableUndoSnapshot();
+      const undoBefore = this.beginTableUndoEntry();
 
       // Unseat all players at this table back to waiting list
       table.seats.forEach(pId => {
@@ -829,6 +1080,7 @@ class Store {
       });
       this.state.tables = this.state.tables.filter(t => t.id !== tableId);
       this.addLog('balance', `Deleted Table ${table.number}`);
+      this.commitTableUndoEntry(undoBefore, `Deleted Table ${table.number}`, "balance");
       this.emit();
     }
   }
@@ -836,12 +1088,23 @@ class Store {
   public closeEmptyTables() {
     const emptyTables = this.state.tables.filter(t => t.seats.every(s => s === null));
     if (emptyTables.length > 0) {
-      this.pushTableUndoSnapshot();
+      const undoBefore = this.beginTableUndoEntry();
+      const closedNumbers = emptyTables.map(et => et.number);
 
       emptyTables.forEach(et => {
         this.state.tables = this.state.tables.filter(t => t.id !== et.id);
-        this.addLog('balance', `Closed Empty Table ${et.number}`);
       });
+
+      const description =
+        closedNumbers.length === 1
+          ? `Closed Empty Table ${closedNumbers[0]}`
+          : `Closed ${closedNumbers.length} empty tables`;
+
+      for (const tableNumber of closedNumbers) {
+        this.addLog('balance', `Closed Empty Table ${tableNumber}`);
+      }
+
+      this.commitTableUndoEntry(undoBefore, description, "balance");
       this.emit();
     }
   }
@@ -853,7 +1116,7 @@ class Store {
 
     if (!player || !table || seatIndex < 0 || seatIndex >= 10) return;
 
-    this.pushTableUndoSnapshot();
+    const undoBefore = this.beginTableUndoEntry();
 
     const existingPlayerId = table.seats[seatIndex];
 
@@ -900,6 +1163,7 @@ class Store {
       : `Seated ${player.firstName} ${player.lastName} at Table ${table.number}, Seat ${seatIndex + 1}`;
 
     this.addLog(wasSeatedElsewhere ? 'move' : 'seating', logMessage);
+    this.commitTableUndoEntry(undoBefore, logMessage, wasSeatedElsewhere ? "move" : "seating");
     this.emit();
   }
 
@@ -907,7 +1171,7 @@ class Store {
     const player = this.state.players.find(p => p.id === playerId);
     if (!player || !player.tableId || player.seatIndex === null) return;
 
-    this.pushTableUndoSnapshot();
+    const undoBefore = this.beginTableUndoEntry();
 
     const updatedTables = this.state.tables.map(table => ({
       ...table,
@@ -927,7 +1191,9 @@ class Store {
     };
 
     this.syncSeatsAfterPlayerChange();
-    this.addLog('move', `Moved ${player.firstName} ${player.lastName} to Waiting List`);
+    const logMessage = `Moved ${player.firstName} ${player.lastName} to Waiting List`;
+    this.addLog('move', logMessage);
+    this.commitTableUndoEntry(undoBefore, logMessage, "move");
     this.emit();
   }
 
@@ -944,9 +1210,8 @@ class Store {
 
     const playerIds = new Set(this.state.players.map(player => player.id));
 
-    const updatedTables = this.state.tables.map(table => ({
-      ...table,
-      seats: table.seats.map(seatId => {
+    const updatedTables = this.state.tables.map(table => {
+      let seats = table.seats.map(seatId => {
         if (!seatId) return null;
         if (!playerIds.has(seatId)) {
           changed = true;
@@ -958,8 +1223,18 @@ class Store {
           return null;
         }
         return seatId;
-      }),
-    }));
+      });
+
+      if (seats.length > MAX_TABLE_SEATS) {
+        changed = true;
+        seats = seats.slice(0, MAX_TABLE_SEATS);
+      } else if (seats.length < MAX_TABLE_SEATS) {
+        changed = true;
+        seats = [...seats, ...Array(MAX_TABLE_SEATS - seats.length).fill(null)];
+      }
+
+      return { ...table, seats };
+    });
 
     const updatedPlayers = this.state.players.map(player => {
       const seatedAt = this.isPlayerSeatedOnTables(player.id, updatedTables);
@@ -1025,7 +1300,7 @@ class Store {
       const t2 = this.state.tables.find(t => t.id === p2.tableId);
       
       if (t1 && t2) {
-        this.pushTableUndoSnapshot();
+        const undoBefore = this.beginTableUndoEntry();
 
         const s1 = p1.seatIndex;
         const s2 = p2.seatIndex;
@@ -1038,7 +1313,9 @@ class Store {
         p2.tableId = t1.id;
         p2.seatIndex = s1;
         
-        this.addLog('move', `Swapped ${p1.firstName} and ${p2.firstName}`);
+        const logMessage = `Swapped ${p1.firstName} and ${p2.firstName}`;
+        this.addLog('move', logMessage);
+        this.commitTableUndoEntry(undoBefore, logMessage, "move");
         this.emit();
       }
     }
@@ -1060,7 +1337,7 @@ class Store {
     const hasEmptySeat = this.state.tables.some(table => table.seats.includes(null));
     if (!hasEmptySeat) return;
 
-    this.pushTableUndoSnapshot();
+    const undoBefore = this.beginTableUndoEntry();
 
     let seatedCount = 0;
     for (const player of waitingPlayers) {
@@ -1082,10 +1359,10 @@ class Store {
     }
 
     if (seatedCount > 0) {
-      this.addLog('balance', `Auto-seated ${seatedCount} players`);
+      const description = `Auto-seated ${seatedCount} players`;
+      this.addLog('balance', description);
+      this.commitTableUndoEntry(undoBefore, description, "balance");
       this.emit();
-    } else {
-      this.tableUndoStack.pop();
     }
   }
 
@@ -1125,7 +1402,7 @@ class Store {
         const destSeatIdx = destTable.seats.indexOf(null);
 
         if (destSeatIdx !== -1) {
-          this.pushTableUndoSnapshot();
+          const undoBefore = this.beginTableUndoEntry();
 
           // Perform move
           sourceTable.seats[sourceSeatIdx] = null;
@@ -1134,7 +1411,9 @@ class Store {
           player.tableId = destTable.id;
           player.seatIndex = destSeatIdx;
 
-          this.addLog('balance', `Balanced tables: Moved ${player.firstName} from Table ${sourceTable.number} to Table ${destTable.number}`);
+          const logMessage = `Balanced tables: Moved ${player.firstName} from Table ${sourceTable.number} to Table ${destTable.number}`;
+          this.addLog('balance', logMessage);
+          this.commitTableUndoEntry(undoBefore, logMessage, "balance");
           this.emit();
           
           // Re-balance recursively in case of massive imbalance

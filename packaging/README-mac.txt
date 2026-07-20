@@ -22,11 +22,17 @@ Quick start
 -----------
 
 1. Extract TourMasterMac.zip to a folder on your tournament Mac
-2. Double-click start.command
-   - First time: if macOS blocks the file, right-click start.command and choose Open
-   - Or in Terminal: chmod +x start.command && ./start.command
-3. Wait — your browser opens http://localhost:3000 automatically
+2. Drag **Tournament Master.app** to Applications (or double-click from the zip folder)
+   - First time: right-click the app and choose **Open** (macOS Gatekeeper)
+   - Alternative: double-click **start.command** in the app bundle (Terminal mode)
+3. Wait — your browser opens http://localhost:3000 automatically (InPrivate/Incognito when supported)
 4. Sign in to PokerClup and choose trial, 30-day, or annual license
+
+Optional DMG installer (build on Mac):
+
+  chmod +x packaging/mac/build-dmg.sh
+  ./packaging/mac/build-dmg.sh
+  -> release/TourMasterMac.dmg
 
 
 Notes
@@ -37,6 +43,9 @@ Notes
 - If port 3000 is already in use, close the other program and run start.command again
 - Phones must use the same WiFi as this Mac for QR tracking
 - QR URL: http://YOUR-LOCAL-IP:3000/track
+- Smart TV venue clock: open Display Manager in the app, copy the Venue Display URL
+  (e.g. http://YOUR-LOCAL-IP:3000/display) into the TV browser on the same Wi‑Fi
+- ID scan (Gemini): requires internet + valid license; API key is hosted by PokerClup (no local setup)
 
 
 Support: support@pokerclup.com

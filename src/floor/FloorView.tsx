@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, PhoneCall, Users } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, PhoneCall, UserX, Users } from "lucide-react";
 import type { FloorCall } from "../types";
 import { localApi } from "../config/api";
-import { useMobileI18n } from "../mobile/translations";
+import { isWsEnabled } from "../config/featureFlags";
+import { useMobileI18n, formatMobileTime } from "../mobile/translations";
+import ConnectionStatus from "../mobile/ConnectionStatus";
+import { useTournamentSocket } from "../websocket/useTournamentSocket";
+import { isChannelPayloadMessage, type TournamentSocketServerMessage } from "../websocket/tournamentSocketTypes";
 
 const POLL_INTERVAL_MS = 1000;
+const WS_FALLBACK_POLL_MS = 15_000;
 const DEVICE_NAME_KEY = "tm-floor-device-name";
 const ALERTS_ENABLED_KEY = "tm-floor-alerts-enabled";
 
@@ -14,11 +19,31 @@ type FloorTableSnapshot = {
   occupants: number;
   seats: Array<{
     seatNumber: number;
+    seatIndex: number;
+    playerId: string | null;
     displayName: string | null;
     isOpen: boolean;
     status: string | null;
   }>;
 };
+
+type MoveTargetTable = {
+  tableNumber: number;
+  tableId: string;
+  occupants: number;
+  emptySeats: Array<{
+    seatNumber: number;
+    seatIndex: number;
+  }>;
+};
+
+type MoveContext = {
+  playerId: string;
+  playerName: string;
+  fromTableNumber: number;
+};
+
+type MoveStep = "idle" | "select-table" | "select-seat";
 
 function playAlertBeep(audioContext: AudioContext) {
   const osc = audioContext.createOscillator();
@@ -40,20 +65,35 @@ function getTeamIdFromQuery(): string | null {
 
 export default function FloorView() {
   const { t } = useMobileI18n();
+
+  useEffect(() => {
+    document.documentElement.lang = "en";
+  }, []);
+
   const teamId = getTeamIdFromQuery();
+  const wsEnabled = isWsEnabled();
+  const floorChannel = teamId ? `floor:${teamId}` : null;
   const [teamName, setTeamName] = useState("Floor");
   const [calls, setCalls] = useState<FloorCall[]>([]);
   const [tables, setTables] = useState<FloorTableSnapshot[]>([]);
   const [expandedTable, setExpandedTable] = useState<number | null>(null);
   const [deviceName, setDeviceName] = useState(() => localStorage.getItem(DEVICE_NAME_KEY) ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
   const [alertsEnabled, setAlertsEnabled] = useState(
     () => localStorage.getItem(ALERTS_ENABLED_KEY) === "1",
   );
+  const [moveStep, setMoveStep] = useState<MoveStep>("idle");
+  const [moveContext, setMoveContext] = useState<MoveContext | null>(null);
+  const [moveTargets, setMoveTargets] = useState<MoveTargetTable[]>([]);
+  const [selectedTargetTable, setSelectedTargetTable] = useState<MoveTargetTable | null>(null);
+  const [moveMessage, setMoveMessage] = useState<string | null>(null);
+  const [moveBusy, setMoveBusy] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const soundTimerRef = useRef<number | null>(null);
   const vibrateTimerRef = useRef<number | null>(null);
   const pendingCountRef = useRef(0);
+  const pendingIdsRef = useRef<Set<string>>(new Set());
 
   const pendingCalls = useMemo(
     () => calls.filter((call) => call.status === "pending"),
@@ -167,6 +207,33 @@ export default function FloorView() {
     }
   }, [alertsEnabled]);
 
+  const applyFloorPayload = useCallback((payload: {
+    teamName?: string;
+    calls?: FloorCall[];
+    tables?: FloorTableSnapshot[];
+  }) => {
+    if (payload.teamName) setTeamName(payload.teamName);
+    if (payload.calls) setCalls(payload.calls);
+    if (payload.tables) setTables(payload.tables);
+    setError(null);
+    setIsConnected(true);
+  }, []);
+
+  const handleWsMessage = useCallback((message: TournamentSocketServerMessage) => {
+    if (!floorChannel || !isChannelPayloadMessage(message) || message.channel !== floorChannel) return;
+    applyFloorPayload(message.payload as {
+      teamName?: string;
+      calls?: FloorCall[];
+      tables?: FloorTableSnapshot[];
+    });
+  }, [applyFloorPayload, floorChannel]);
+
+  const { connected: wsConnected } = useTournamentSocket({
+    enabled: wsEnabled && Boolean(floorChannel),
+    channels: floorChannel ? [floorChannel] : [],
+    onMessage: handleWsMessage,
+  });
+
   const fetchData = useCallback(async () => {
     if (!teamId) return;
 
@@ -186,37 +253,132 @@ export default function FloorView() {
       setCalls(callsData.calls ?? []);
       setTables(tablesData.tables ?? []);
       setError(null);
+      setIsConnected(true);
     } catch (fetchError) {
+      setIsConnected(false);
       setError(fetchError instanceof Error ? fetchError.message : "Failed to load floor data.");
     }
   }, [teamId]);
+
+  const pollIntervalMs = useMemo(() => {
+    if (!wsEnabled) return POLL_INTERVAL_MS;
+    return wsConnected ? WS_FALLBACK_POLL_MS : POLL_INTERVAL_MS;
+  }, [wsConnected, wsEnabled]);
 
   useEffect(() => {
     if (!teamId) return;
     void fetchData();
     const timer = window.setInterval(() => {
       void fetchData();
-    }, POLL_INTERVAL_MS);
+    }, pollIntervalMs);
     return () => window.clearInterval(timer);
-  }, [teamId, fetchData]);
+  }, [teamId, fetchData, pollIntervalMs]);
 
   useEffect(() => {
     const previousCount = pendingCountRef.current;
+    const previousIds = pendingIdsRef.current;
+    const currentIds = new Set(pendingCalls.map((call) => call.id));
+    const hasNewPending = pendingCalls.some((call) => !previousIds.has(call.id));
+
     pendingCountRef.current = pendingCalls.length;
+    pendingIdsRef.current = currentIds;
 
     if (pendingCalls.length === 0) {
       stopAlert();
       return;
     }
 
-    startAlert();
-
-    if (previousCount === 0 && pendingCalls.length > 0 && !alertsEnabled) {
-      startVibrateAlert();
+    if (hasNewPending || pendingCalls.length > previousCount) {
+      startAlert();
+      return;
     }
-  }, [pendingCalls.length, alertsEnabled, startAlert, startVibrateAlert, stopAlert]);
+
+    startAlert();
+  }, [pendingCalls, alertsEnabled, startAlert, stopAlert]);
 
   useEffect(() => () => stopAlert(), [stopAlert]);
+
+  const resetMoveModal = () => {
+    setMoveStep("idle");
+    setMoveContext(null);
+    setMoveTargets([]);
+    setSelectedTargetTable(null);
+    setMoveBusy(false);
+  };
+
+  const closeMoveModal = () => {
+    resetMoveModal();
+    setMoveMessage(null);
+  };
+
+  const fetchMoveTargets = useCallback(async () => {
+    if (!teamId) return [];
+
+    const response = await fetch(localApi(`/api/floor/move-targets?teamId=${encodeURIComponent(teamId)}`));
+    if (!response.ok) {
+      throw new Error(t.moveFailed);
+    }
+
+    const data = await response.json();
+    return (data.tables ?? []) as MoveTargetTable[];
+  }, [teamId, t.moveFailed]);
+
+  const handleMoveStart = async (
+    playerId: string,
+    playerName: string,
+    fromTableNumber: number,
+  ) => {
+    setMoveMessage(null);
+    setMoveContext({ playerId, playerName, fromTableNumber });
+    setMoveStep("select-table");
+    setSelectedTargetTable(null);
+
+    try {
+      const targets = await fetchMoveTargets();
+      setMoveTargets(targets);
+    } catch (moveError) {
+      resetMoveModal();
+      setMoveMessage(moveError instanceof Error ? moveError.message : t.moveFailed);
+    }
+  };
+
+  const handleSelectTargetTable = (table: MoveTargetTable) => {
+    setSelectedTargetTable(table);
+    setMoveStep("select-seat");
+  };
+
+  const handleConfirmMove = async (targetSeatIndex: number) => {
+    if (!teamId || !moveContext || !selectedTargetTable) return;
+
+    setMoveBusy(true);
+    setMoveMessage(null);
+
+    try {
+      const response = await fetch(localApi("/api/floor/move-player"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          teamId,
+          playerId: moveContext.playerId,
+          targetTableNumber: selectedTargetTable.tableNumber,
+          targetSeatIndex,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || data.error || t.moveFailed);
+      }
+
+      setMoveMessage(t.playerMoved);
+      resetMoveModal();
+      await fetchData();
+    } catch (moveError) {
+      setMoveMessage(moveError instanceof Error ? moveError.message : t.moveFailed);
+    } finally {
+      setMoveBusy(false);
+    }
+  };
 
   const handleAck = async (callId: string) => {
     if (!teamId) return;
@@ -291,15 +453,24 @@ export default function FloorView() {
         ) : null}
 
         <div className="rounded-3xl border border-zinc-800 bg-zinc-900/80 p-5">
-          <p className="text-[10px] font-black uppercase tracking-[0.25em] text-orange-400">{t.floorMobile}</p>
-          <h1 className="mt-2 text-2xl font-black uppercase">{teamName}</h1>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.25em] text-orange-400">{t.floorMobile}</p>
+              <h1 className="mt-2 text-2xl font-black uppercase">{teamName}</h1>
+            </div>
+            <ConnectionStatus
+              connected={isConnected}
+              connectLabel={t.connect}
+              disconnectLabel={t.disconnect}
+            />
+          </div>
           <label className="block mt-4">
             <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">{t.yourName}</span>
             <input
               value={deviceName}
               onChange={(event) => setDeviceName(event.target.value)}
               className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm"
-              placeholder="Ali"
+              placeholder="Alex"
             />
           </label>
           {alertsEnabled ? (
@@ -319,45 +490,69 @@ export default function FloorView() {
         </div>
 
         {error ? <p className="text-sm text-red-400">{error}</p> : null}
+        {moveMessage ? <p className="text-sm text-orange-300">{moveMessage}</p> : null}
 
         {calls.length === 0 ? (
           <div className="rounded-3xl border border-dashed border-zinc-800 p-8 text-center text-sm text-zinc-500">
             {t.noFloorCalls}
           </div>
         ) : (
-          calls.map((call) => (
+          calls.map((call) => {
+            const isElimination = call.kind === "player_eliminated";
+
+            return (
             <div
               key={call.id}
               className={`rounded-3xl border p-5 ${
                 call.status === "pending"
-                  ? "border-red-500/40 bg-red-500/10"
+                  ? isElimination
+                    ? "border-orange-500/40 bg-orange-500/10"
+                    : "border-red-500/40 bg-red-500/10"
                   : call.status === "acknowledged"
                     ? "border-yellow-500/30 bg-yellow-500/10"
                     : "border-zinc-800 bg-zinc-900"
               }`}
             >
-              <div className="flex items-center gap-2 text-red-300">
-                <PhoneCall className="w-5 h-5" />
+              <div className={`flex items-center gap-2 ${isElimination ? "text-orange-300" : "text-red-300"}`}>
+                {isElimination ? <UserX className="w-5 h-5" /> : <PhoneCall className="w-5 h-5" />}
                 <p className="text-3xl font-black">{t.table} {call.tableNumber}</p>
               </div>
-              <p className="mt-2 text-sm text-zinc-400">
-                {t.floorCallAt} · {new Date(call.createdAt).toLocaleTimeString()}
-              </p>
+
+              {isElimination ? (
+                <>
+                  <p className="mt-3 text-xl font-black uppercase text-zinc-100">
+                    {call.playerName ?? "-"}
+                  </p>
+                  <p className="mt-1 text-sm text-orange-200/80">
+                    {t.floorPlayerEliminated} · {formatMobileTime(call.createdAt)}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-2 text-sm text-zinc-400">
+                  {t.floorCallAt} · {formatMobileTime(call.createdAt)}
+                </p>
+              )}
 
               {call.status === "pending" ? (
                 <button
                   type="button"
                   onClick={(event) => {
                     event.stopPropagation();
+                    if (isElimination) {
+                      void handleResolve(call.id);
+                      return;
+                    }
                     void handleAck(call.id);
                   }}
-                  className="mt-4 w-full rounded-xl bg-red-500 px-4 py-3 text-sm font-black uppercase text-black"
+                  className={`mt-4 w-full rounded-xl px-4 py-3 text-sm font-black uppercase text-black ${
+                    isElimination ? "bg-orange-500" : "bg-red-500"
+                  }`}
                 >
-                  {t.going}
+                  {isElimination ? t.dismissAlert : t.going}
                 </button>
               ) : null}
 
-              {call.status === "acknowledged" ? (
+              {call.status === "acknowledged" && !isElimination ? (
                 <div className="mt-4 space-y-3">
                   <p className="text-sm text-yellow-200">
                     {call.acknowledgedBy ? t.responding(call.acknowledgedBy) : t.going}
@@ -375,7 +570,8 @@ export default function FloorView() {
                 </div>
               ) : null}
             </div>
-          ))
+            );
+          })
         )}
 
         <div className="rounded-3xl border border-zinc-800 bg-zinc-900/80 p-5">
@@ -412,12 +608,28 @@ export default function FloorView() {
                         {table.seats.map((seat) => (
                           <div
                             key={`${table.tableNumber}-${seat.seatNumber}`}
-                            className="flex items-center justify-between rounded-xl border border-zinc-800 px-3 py-2"
+                            className="flex items-center justify-between gap-2 rounded-xl border border-zinc-800 px-3 py-2"
                           >
                             <span className="text-xs font-mono text-orange-300">{t.seat} {seat.seatNumber}</span>
-                            <span className="text-sm font-semibold truncate ml-3">
+                            <span className="text-sm font-semibold truncate ml-3 flex-1 text-right">
                               {seat.isOpen ? t.seatOpen : seat.displayName}
                             </span>
+                            {!seat.isOpen && seat.playerId ? (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void handleMoveStart(
+                                    seat.playerId!,
+                                    seat.displayName ?? "",
+                                    table.tableNumber,
+                                  );
+                                }}
+                                className="shrink-0 rounded-lg border border-orange-500/40 bg-orange-500/10 px-2 py-1 text-[10px] font-black uppercase text-orange-300"
+                              >
+                                {t.move}
+                              </button>
+                            ) : null}
                           </div>
                         ))}
                       </div>
@@ -429,6 +641,90 @@ export default function FloorView() {
           )}
         </div>
       </div>
+
+      {moveStep !== "idle" && moveContext ? (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 p-4">
+          <div className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-900 p-5 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.25em] text-orange-400">{t.movePlayer}</p>
+                <h2 className="mt-1 text-lg font-black uppercase truncate">{moveContext.playerName}</h2>
+              </div>
+              {moveStep === "select-seat" ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoveStep("select-table");
+                    setSelectedTargetTable(null);
+                  }}
+                  className="rounded-xl border border-zinc-700 p-2"
+                  aria-label={t.selectTable}
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={closeMoveModal}
+                  className="rounded-xl border border-zinc-700 px-3 py-2 text-xs font-bold uppercase"
+                >
+                  {t.cancel}
+                </button>
+              )}
+            </div>
+
+            {moveStep === "select-table" ? (
+              <div className="mt-4 space-y-2">
+                <p className="text-xs font-bold uppercase tracking-wider text-zinc-500">{t.selectTable}</p>
+                {moveTargets.map((table) => (
+                  <button
+                    key={table.tableId}
+                    type="button"
+                    disabled={table.emptySeats.length === 0}
+                    onClick={() => handleSelectTargetTable(table)}
+                    className={`flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left ${
+                      table.emptySeats.length === 0
+                        ? "border-zinc-800 bg-zinc-950/40 text-zinc-600"
+                        : "border-zinc-700 bg-zinc-950 hover:border-orange-500/40"
+                    }`}
+                  >
+                    <span className="font-black">{t.table} {table.tableNumber}</span>
+                    <span className="text-xs text-zinc-500">
+                      {table.emptySeats.length === 0
+                        ? t.noEmptySeats
+                        : `${table.emptySeats.length} ${t.seatOpen.toLowerCase()}`}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            {moveStep === "select-seat" && selectedTargetTable ? (
+              <div className="mt-4 space-y-2">
+                <p className="text-xs font-bold uppercase tracking-wider text-zinc-500">
+                  {t.selectSeat} · {t.table} {selectedTargetTable.tableNumber}
+                </p>
+                {selectedTargetTable.emptySeats.length === 0 ? (
+                  <p className="text-sm text-zinc-500">{t.noEmptySeats}</p>
+                ) : (
+                  selectedTargetTable.emptySeats.map((seat) => (
+                    <button
+                      key={`${selectedTargetTable.tableNumber}-${seat.seatIndex}`}
+                      type="button"
+                      disabled={moveBusy}
+                      onClick={() => void handleConfirmMove(seat.seatIndex)}
+                      className="flex w-full items-center justify-between rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 text-left hover:border-orange-500/40 disabled:opacity-60"
+                    >
+                      <span className="font-black">{t.seat} {seat.seatNumber}</span>
+                      <span className="text-xs uppercase text-orange-300">{t.move}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

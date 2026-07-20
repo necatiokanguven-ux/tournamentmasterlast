@@ -4,6 +4,8 @@ import { ClockState, Player, PayoutStructure, Table, TournamentSettings } from "
 import { buildPlayerDisplayName } from "./playerSearch";
 import { buildTrackingLiveState } from "./liveState";
 import { isTrackingActivePlayer } from "./playerStatus";
+import { getCachedTrackingPlayersPayload } from "./trackingResponseCache";
+import { buildTrackingPlayersEtag, sendTrackingJsonWithEtag } from "./trackingHttpUtils";
 
 type TrackingDataSource = () => {
   players: Player[];
@@ -11,6 +13,7 @@ type TrackingDataSource = () => {
   tables: Table[];
   clock: ClockState;
   payouts?: PayoutStructure[];
+  meta?: { lastModified?: number };
 };
 
 function getLocalNetworkAddresses(): string[] {
@@ -63,40 +66,49 @@ export function createTrackingRouter(port: number, getData: TrackingDataSource) 
     });
   });
 
-  router.get("/players", (_req, res) => {
-    const { players, settings, tables } = getData();
-    const tableById = new Map(tables.map((table) => [table.id, table]));
+  router.get("/players", (req, res) => {
+    const snapshot = getData();
+    const metaVersion = snapshot.meta?.lastModified ?? 0;
+    const etag = buildTrackingPlayersEtag(metaVersion);
+    const payload = getCachedTrackingPlayersPayload(snapshot.meta, () => {
+      const tableById = new Map(snapshot.tables.map((table) => [table.id, table]));
 
-    const trackingPlayers = players
-      .map((player) => {
-        const table = player.tableId ? tableById.get(player.tableId) : undefined;
-        const seatNumber =
-          player.seatIndex !== null && player.seatIndex !== undefined ? player.seatIndex + 1 : null;
+      const trackingPlayers = snapshot.players
+        .map((player) => {
+          const table = player.tableId ? tableById.get(player.tableId) : undefined;
+          const seatNumber =
+            player.seatIndex !== null && player.seatIndex !== undefined ? player.seatIndex + 1 : null;
 
-        return {
-          id: player.id,
-          displayName: buildPlayerDisplayName(player.firstName, player.lastName),
-          tableNumber: table?.number ?? null,
-          seatNumber,
-          status: player.status,
-        };
-      })
-      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+          return {
+            id: player.id,
+            displayName: buildPlayerDisplayName(player.firstName, player.lastName),
+            tableNumber: table?.number ?? null,
+            seatNumber,
+            status: player.status,
+          };
+        })
+        .sort((a, b) => a.displayName.localeCompare(b.displayName));
 
-    res.json({
-      tournamentName: settings.name,
-      players: trackingPlayers,
+      return {
+        tournamentName: snapshot.settings.name,
+        players: trackingPlayers,
+      };
     });
+
+    sendTrackingJsonWithEtag(req, res, etag, payload);
   });
 
   router.get("/live", (_req, res) => {
-    const data = getData();
-    res.json(buildTrackingLiveState({
-      settings: data.settings,
-      clock: data.clock,
-      players: data.players,
-      payouts: data.payouts,
-    }));
+    const snapshot = getData();
+    const payload = buildTrackingLiveState({
+      settings: snapshot.settings,
+      clock: snapshot.clock,
+      players: snapshot.players,
+      payouts: snapshot.payouts,
+    });
+
+    res.setHeader("Cache-Control", "private, no-cache");
+    res.json(payload);
   });
 
   router.get("/payouts", (_req, res) => {

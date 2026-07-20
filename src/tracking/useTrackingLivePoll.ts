@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { localApi } from "../config/api";
 import { mergeTrackingLiveState, type TrackingLiveState } from "./liveState";
-
-const POLL_INTERVAL_MS = 2000;
+import { TRACKING_LIVE_POLL_MS } from "./trackingPollConfig";
 
 export function useTrackingLivePoll(enabled: boolean) {
   const [liveState, setLiveState] = useState<TrackingLiveState | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const isRunningRef = useRef(false);
 
   const fetchLiveState = useCallback(async () => {
     try {
-      const response = await fetch("/api/tracking/live");
+      const response = await fetch(localApi("/api/tracking/live"));
       if (!response.ok) {
         throw new Error("Live tracking request failed.");
       }
@@ -31,10 +30,6 @@ export function useTrackingLivePoll(enabled: boolean) {
   }, []);
 
   useEffect(() => {
-    isRunningRef.current = Boolean(liveState?.isRunning);
-  }, [liveState?.isRunning]);
-
-  useEffect(() => {
     if (!enabled) {
       setLiveState(null);
       setError(null);
@@ -44,35 +39,12 @@ export function useTrackingLivePoll(enabled: boolean) {
     void fetchLiveState();
     const pollTimer = window.setInterval(() => {
       void fetchLiveState();
-    }, POLL_INTERVAL_MS);
+    }, TRACKING_LIVE_POLL_MS);
 
     return () => {
       window.clearInterval(pollTimer);
     };
   }, [enabled, fetchLiveState]);
-
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-
-    const tickTimer = window.setInterval(() => {
-      setLiveState((current) => {
-        if (!current || !isRunningRef.current || current.timeRemaining <= 0) {
-          return current;
-        }
-
-        return {
-          ...current,
-          timeRemaining: current.timeRemaining - 1,
-        };
-      });
-    }, 1000);
-
-    return () => {
-      window.clearInterval(tickTimer);
-    };
-  }, [enabled]);
 
   return { liveState, error, refresh: fetchLiveState };
 }

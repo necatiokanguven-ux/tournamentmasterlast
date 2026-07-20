@@ -1,20 +1,32 @@
 import { useEffect, useMemo, useState } from "react";
 import { localApi } from "../config/api";
+import { requestAppFullscreen } from "./useDealerKioskMode";
+import {
+  dealerHref,
+  getDealerDeviceTypeFromQuery,
+  getDealerSetupTableFromQuery,
+  type DealerDeviceType,
+} from "./dealerPaths";
 
 const STORAGE_KEY = "tm-dealer-tablet-config";
 
 type StoredDealerConfig = {
   tableNumber: number;
   setupLocked: boolean;
+  deviceType: DealerDeviceType;
 };
 
 function readStoredConfig(): StoredDealerConfig | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredDealerConfig;
+    const parsed = JSON.parse(raw) as Partial<StoredDealerConfig>;
     if (!parsed.tableNumber) return null;
-    return parsed;
+    return {
+      tableNumber: parsed.tableNumber,
+      setupLocked: parsed.setupLocked ?? false,
+      deviceType: parsed.deviceType === "phone" ? "phone" : "tablet",
+    };
   } catch {
     return null;
   }
@@ -24,29 +36,18 @@ function writeStoredConfig(config: StoredDealerConfig) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
 }
 
-function getQueryTableNumber(): number | null {
-  const params = new URLSearchParams(window.location.search);
-  const value = Number.parseInt(params.get("table") ?? "", 10);
-  return Number.isFinite(value) ? value : null;
-}
-
 type DealerSetupViewProps = {
   onConfigured: (tableNumber: number) => void;
 };
 
 export default function DealerSetupView({ onConfigured }: DealerSetupViewProps) {
-  const queryTable = getQueryTableNumber();
+  const queryTable = getDealerSetupTableFromQuery();
+  const queryDevice = getDealerDeviceTypeFromQuery();
   const [tables, setTables] = useState<Array<{ number: number }>>([]);
   const [selectedTable, setSelectedTable] = useState<number | null>(queryTable);
   const [loading, setLoading] = useState(true);
+  const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const stored = readStoredConfig();
-    if (stored?.setupLocked) {
-      onConfigured(stored.tableNumber);
-    }
-  }, [onConfigured]);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,7 +55,10 @@ export default function DealerSetupView({ onConfigured }: DealerSetupViewProps) 
     const loadTables = async () => {
       try {
         const response = await fetch(localApi("/api/dealer/tables"));
-        if (!response.ok) throw new Error("Local server unavailable.");
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.message || data.error || "Local server unavailable.");
+        }
         const data = await response.json();
         if (!cancelled) {
           setTables(data.tables ?? []);
@@ -77,11 +81,31 @@ export default function DealerSetupView({ onConfigured }: DealerSetupViewProps) 
 
   const effectiveTable = useMemo(() => queryTable ?? selectedTable, [queryTable, selectedTable]);
 
-  const handleConfirm = () => {
-    if (!effectiveTable) return;
-    writeStoredConfig({ tableNumber: effectiveTable, setupLocked: true });
-    window.history.replaceState({}, "", `/dealer/${effectiveTable}`);
-    onConfigured(effectiveTable);
+  const handleConfirm = async () => {
+    if (!effectiveTable || confirming) return;
+
+    setConfirming(true);
+    setError(null);
+
+    try {
+      const knownTable = tables.some((table) => table.number === effectiveTable);
+      if (!loading && tables.length > 0 && !knownTable) {
+        throw new Error(`Table ${effectiveTable} was not found on the tournament server.`);
+      }
+
+      writeStoredConfig({
+        tableNumber: effectiveTable,
+        setupLocked: true,
+        deviceType: queryDevice ?? readStoredConfig()?.deviceType ?? "tablet",
+      });
+      window.history.replaceState({}, "", dealerHref(`/dealer/${effectiveTable}`));
+      await requestAppFullscreen();
+      onConfigured(effectiveTable);
+    } catch (confirmError) {
+      setError(confirmError instanceof Error ? confirmError.message : "Could not open dealer screen.");
+    } finally {
+      setConfirming(false);
+    }
   };
 
   return (
@@ -123,11 +147,11 @@ export default function DealerSetupView({ onConfigured }: DealerSetupViewProps) 
 
         <button
           type="button"
-          onClick={handleConfirm}
-          disabled={!effectiveTable}
+          onClick={() => void handleConfirm()}
+          disabled={!effectiveTable || confirming || loading}
           className="mt-6 w-full rounded-xl bg-amber-500 px-4 py-3 text-sm font-black uppercase tracking-wider text-black disabled:opacity-40"
         >
-          Confirm And Open Dealer Screen
+          {confirming ? "Opening..." : "Confirm And Open Dealer Screen"}
         </button>
       </div>
     </div>

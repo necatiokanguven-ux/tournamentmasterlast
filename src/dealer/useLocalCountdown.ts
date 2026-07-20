@@ -37,33 +37,26 @@ function readRemainingSeconds(endTimeMs: number): number {
   return Math.max(0, Math.ceil((endTimeMs - Date.now()) / 1000));
 }
 
-function msUntilNextSecond(endTimeMs: number): number {
-  const msRemaining = endTimeMs - Date.now();
-  if (msRemaining <= 0) return 0;
-  const displayed = Math.ceil(msRemaining / 1000);
-  const nextBoundaryMs = msRemaining - (displayed - 1) * 1000;
-  return Math.max(0, nextBoundaryMs);
-}
-
 export function useLocalCountdown(defaultCallSeconds: number, defaultPlayerSeconds: number) {
   const [mode, setMode] = useState<CountdownMode>("idle");
   const [timerState, setTimerState] = useState<CountdownState>("stopped");
   const [secondsRemaining, setSecondsRemaining] = useState(0);
   const [totalSeconds, setTotalSeconds] = useState(0);
+  const [sessionId, setSessionId] = useState(0);
   const endTimeRef = useRef<number | null>(null);
   const pausedRemainingRef = useRef(0);
   const lastBeepSecondRef = useRef<number | null>(null);
-  const tickTimeoutRef = useRef<number | null>(null);
+  const intervalRef = useRef<number | null>(null);
 
-  const clearTickTimeout = useCallback(() => {
-    if (tickTimeoutRef.current !== null) {
-      window.clearTimeout(tickTimeoutRef.current);
-      tickTimeoutRef.current = null;
+  const clearTickInterval = useCallback(() => {
+    if (intervalRef.current !== null) {
+      window.clearInterval(intervalRef.current);
+      intervalRef.current = null;
     }
   }, []);
 
   const resetTimer = useCallback(() => {
-    clearTickTimeout();
+    clearTickInterval();
     setTimerState("stopped");
     setMode("idle");
     setSecondsRemaining(0);
@@ -71,58 +64,55 @@ export function useLocalCountdown(defaultCallSeconds: number, defaultPlayerSecon
     endTimeRef.current = null;
     pausedRemainingRef.current = 0;
     lastBeepSecondRef.current = null;
-  }, [clearTickTimeout]);
+  }, [clearTickInterval]);
+
+  const beginCountdown = useCallback((nextMode: CountdownMode, durationSeconds: number) => {
+    const duration = Math.max(1, Math.round(durationSeconds));
+    clearTickInterval();
+    endTimeRef.current = Date.now() + duration * 1000;
+    pausedRemainingRef.current = 0;
+    lastBeepSecondRef.current = null;
+    setMode(nextMode);
+    setTotalSeconds(duration);
+    setSecondsRemaining(duration);
+    setTimerState("running");
+    setSessionId((current) => current + 1);
+  }, [clearTickInterval]);
 
   const startCallTime = useCallback(() => {
-    clearTickTimeout();
-    setMode("call_time");
-    setTimerState("running");
-    setTotalSeconds(defaultCallSeconds);
-    setSecondsRemaining(defaultCallSeconds);
-    endTimeRef.current = Date.now() + defaultCallSeconds * 1000;
-    pausedRemainingRef.current = 0;
-    lastBeepSecondRef.current = null;
-  }, [clearTickTimeout, defaultCallSeconds]);
+    beginCountdown("call_time", defaultCallSeconds);
+  }, [beginCountdown, defaultCallSeconds]);
 
   const startPlayerTime = useCallback(() => {
-    clearTickTimeout();
-    setMode("player_time");
-    setTimerState("running");
-    setTotalSeconds(defaultPlayerSeconds);
-    setSecondsRemaining(defaultPlayerSeconds);
-    endTimeRef.current = Date.now() + defaultPlayerSeconds * 1000;
-    pausedRemainingRef.current = 0;
-    lastBeepSecondRef.current = null;
-  }, [clearTickTimeout, defaultPlayerSeconds]);
+    beginCountdown("player_time", defaultPlayerSeconds);
+  }, [beginCountdown, defaultPlayerSeconds]);
 
   const pauseTimer = useCallback(() => {
     if (endTimeRef.current === null) return;
 
-    clearTickTimeout();
+    clearTickInterval();
     const remaining = readRemainingSeconds(endTimeRef.current);
     pausedRemainingRef.current = remaining;
     setSecondsRemaining(remaining);
     endTimeRef.current = null;
     setTimerState("paused");
-  }, [clearTickTimeout]);
+  }, [clearTickInterval]);
 
   const resumeTimer = useCallback(() => {
-    setTimerState((current) => {
-      if (current !== "paused" || pausedRemainingRef.current <= 0) {
-        return current;
-      }
-      endTimeRef.current = Date.now() + pausedRemainingRef.current * 1000;
-      return "running";
-    });
-  }, []);
-
-  useEffect(() => {
-    if (timerState !== "running" || endTimeRef.current === null) {
-      clearTickTimeout();
+    if (timerState !== "paused" || pausedRemainingRef.current <= 0) {
       return;
     }
 
-    const scheduleTick = () => {
+    beginCountdown(mode === "player_time" ? "player_time" : "call_time", pausedRemainingRef.current);
+  }, [beginCountdown, mode, timerState]);
+
+  useEffect(() => {
+    if (timerState !== "running" || endTimeRef.current === null) {
+      clearTickInterval();
+      return;
+    }
+
+    const tick = () => {
       const endTime = endTimeRef.current;
       if (endTime === null) return;
 
@@ -132,19 +122,17 @@ export function useLocalCountdown(defaultCallSeconds: number, defaultPlayerSecon
       if (remaining <= 0) {
         endTimeRef.current = null;
         setTimerState("stopped");
-        tickTimeoutRef.current = null;
-        return;
+        clearTickInterval();
       }
-
-      tickTimeoutRef.current = window.setTimeout(scheduleTick, msUntilNextSecond(endTime));
     };
 
-    scheduleTick();
+    tick();
+    intervalRef.current = window.setInterval(tick, 200);
 
     return () => {
-      clearTickTimeout();
+      clearTickInterval();
     };
-  }, [timerState, clearTickTimeout]);
+  }, [timerState, sessionId, clearTickInterval]);
 
   useEffect(() => {
     if (timerState !== "running" || secondsRemaining <= 0) {

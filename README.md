@@ -15,6 +15,7 @@ View your app in AI Studio: https://ai.studio/apps/6a504e82-066a-4ea9-8d1a-0c4f8
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+2. Run the app:
    `npm run dev`
+
+ID scan uses the PokerClup cloud API (`api.pokerclup.com/api/id-scan`). Gemini keys belong on the VPS only — see [vps/id-scan/README.md](vps/id-scan/README.md).

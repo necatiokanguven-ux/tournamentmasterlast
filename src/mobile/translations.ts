@@ -1,5 +1,3 @@
-import { detectTrackingLocale, type TrackingLocale } from "../tracking/translations";
-
 export type MobileTranslations = {
   dealerTablet: string;
   floorMobile: string;
@@ -24,7 +22,7 @@ export type MobileTranslations = {
   pause: string;
   reset: string;
   eliminatePlayer: string;
-  confirmEliminate: (name: string) => string;
+  confirmEliminatePrompt: string;
   cancel: string;
   yesEliminate: string;
   loading: string;
@@ -40,9 +38,20 @@ export type MobileTranslations = {
   enableAlerts: string;
   alertsEnabled: string;
   floorCallAt: string;
+  floorPlayerEliminated: string;
+  dismissAlert: string;
+  connect: string;
+  disconnect: string;
+  move: string;
+  selectTable: string;
+  selectSeat: string;
+  movePlayer: string;
+  noEmptySeats: string;
+  playerMoved: string;
+  moveFailed: string;
 };
 
-const en: MobileTranslations = {
+const mobileTranslations: MobileTranslations = {
   dealerTablet: "Dealer Tablet",
   floorMobile: "Floor Mobile",
   table: "Table",
@@ -66,7 +75,7 @@ const en: MobileTranslations = {
   pause: "Pause",
   reset: "Reset",
   eliminatePlayer: "Eliminate Player",
-  confirmEliminate: (name) => `${name} — are you sure you want to eliminate this player?`,
+  confirmEliminatePrompt: "Are you sure you want to eliminate this player?",
   cancel: "Cancel",
   yesEliminate: "Yes, Eliminate",
   loading: "Loading...",
@@ -82,61 +91,26 @@ const en: MobileTranslations = {
   enableAlerts: "Tap anywhere to enable sound and vibration alerts",
   alertsEnabled: "Alerts enabled",
   floorCallAt: "Floor call",
+  floorPlayerEliminated: "Player eliminated",
+  dismissAlert: "OK",
+  connect: "Connect",
+  disconnect: "Disconnect",
+  move: "Move",
+  selectTable: "Select Table",
+  selectSeat: "Select Empty Seat",
+  movePlayer: "Move Player",
+  noEmptySeats: "No empty seats on this table.",
+  playerMoved: "Player moved.",
+  moveFailed: "Could not move player.",
 };
 
-const tr: MobileTranslations = {
-  dealerTablet: "Dealer Tablet",
-  floorMobile: "Floor Mobil",
-  table: "Masa",
-  seat: "Koltuk",
-  seatOpen: "Boş Koltuk",
-  tapToEliminate: "Elemek için dokun",
-  callFloor: "Floor Çağır",
-  floorCalled: "Floor çağrıldı.",
-  playerEliminated: "Oyuncu elendi.",
-  clock: "Saat",
-  level: "Seviye",
-  blinds: "Blind",
-  nextLevel: "Sonraki Seviye",
-  nextBreak: "Sonraki Mola",
-  players: "Oyuncular",
-  breakLabel: "MOLA",
-  callTime: "Call Time",
-  playerTime: "Player Time",
-  ready: "Hazır",
-  start: "Başlat",
-  pause: "Duraklat",
-  reset: "Sıfırla",
-  eliminatePlayer: "Oyuncuyu Ele",
-  confirmEliminate: (name) => `${name} — oyuncuyu silmek istediğinizden emin misiniz?`,
-  cancel: "İptal",
-  yesEliminate: "Evet, Ele",
-  loading: "Yükleniyor...",
-  yourName: "Adınız",
-  missingTeam: "Floor ekibi bulunamadı. Tournament Master'dan floor QR kodunu okutun.",
-  noFloorCalls: "Bu ekip için aktif floor çağrısı yok.",
-  going: "Gidiyorum",
-  responding: (name) => `${name} müdahale ediyor`,
-  resolved: "Çözüldü",
-  assignedTables: "Atanan Masalar",
-  noAssignedTables: "Bu floor ekibine atanmış masa yok.",
-  occupants: (count) => `${count} oyuncu`,
-  enableAlerts: "Ses ve titreşim için ekrana dokunun",
-  alertsEnabled: "Uyarılar açık",
-  floorCallAt: "Floor çağrısı",
-};
-
-const catalog: Record<"en" | "tr", MobileTranslations> = { en, tr };
-
-export function useMobileI18n(): { locale: TrackingLocale; t: MobileTranslations } {
-  const locale = detectTrackingLocale();
-  const lang = locale === "tr" ? "tr" : "en";
-  return { locale, t: catalog[lang] };
+/** Dealer and floor operator screens are always English. */
+export function useMobileI18n(): { t: MobileTranslations } {
+  return { t: mobileTranslations };
 }
 
 export function formatDealerLevel(
   currentLevel: number,
-  currentLevelIndex: number,
   isBreak: boolean,
   breakLabel: string,
 ): string {
@@ -144,9 +118,14 @@ export function formatDealerLevel(
     return breakLabel;
   }
 
-  if (currentLevel > 0) {
-    return String(currentLevel);
-  }
+  return String(Math.max(1, currentLevel));
+}
 
-  return String(Math.max(1, currentLevelIndex + 1));
+export const MOBILE_LOCALE = "en-US";
+
+export function formatMobileTime(value: string | number | Date): string {
+  return new Date(value).toLocaleTimeString(MOBILE_LOCALE, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }

@@ -124,13 +124,23 @@ export async function resolveBrowserLicenseStatus(): Promise<LocalLicenseStatus>
 }
 
 export async function activateBrowserLicense(licenseKey: string): Promise<LocalLicenseStatus> {
+  const trimmedKey = licenseKey.trim();
+  if (!trimmedKey) {
+    throw new Error("License key is required.");
+  }
+
   const machine = getOrCreateBrowserMachine();
+  const verifyResult = await verifyRemoteLicense(trimmedKey, machine.machineId);
+  if (verifyResult.valid) {
+    saveBrowserLicense(trimmedKey);
+    return resolveBrowserLicenseStatus();
+  }
 
   const activateResponse = await fetch(`${LICENSE_API_BASE}/activate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      licenseKey,
+      licenseKey: trimmedKey,
       machineId: machine.machineId,
       machineName: machine.machineName,
     }),
@@ -138,9 +148,15 @@ export async function activateBrowserLicense(licenseKey: string): Promise<LocalL
 
   const activateData = (await activateResponse.json()) as LicenseVerifyResponse;
   if (!activateResponse.ok || !activateData.valid) {
+    const retryVerify = await verifyRemoteLicense(trimmedKey, machine.machineId);
+    if (retryVerify.valid) {
+      saveBrowserLicense(trimmedKey);
+      return resolveBrowserLicenseStatus();
+    }
+
     throw new Error(activateData.message || "License activation failed.");
   }
 
-  saveBrowserLicense(licenseKey);
+  saveBrowserLicense(trimmedKey);
   return resolveBrowserLicenseStatus();
 }

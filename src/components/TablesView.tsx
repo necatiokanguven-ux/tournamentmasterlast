@@ -5,11 +5,16 @@
 
 import React, { useState, useMemo } from "react";
 import { useTournament } from "../useTournament";
-import { Plus, Trash2, ShieldAlert, Users, Grid, RefreshCw, X, UserCheck, Undo2, QrCode, PhoneCall, Timer } from "lucide-react";
+import { useDealerControl } from "../dealerRotation/useDealerControl";
+import { formatTableDealDuration, formatDealerTableTiming, getCurrentTableDealSeconds, getDealRemainingSeconds } from "../dealerRotation/dealerTimeUtils";
+import { useLiveSecond } from "../dealerRotation/useLiveSecond";
+import { dealerDisplayName } from "../server/dealerRotation/types";
+import { Plus, Trash2, Skull, ShieldAlert, Users, Grid, RefreshCw, X, UserCheck, Undo2, QrCode, PhoneCall, Timer, UserCog } from "lucide-react";
 import { Table } from "../types";
 import TableQrModal from "./TableQrModal";
 import FloorSetupModal from "./FloorSetupModal";
 import DealerTimerSettingsModal from "./DealerTimerSettingsModal";
+import TableUndoModal from "./TableUndoModal";
 
 export default function TablesView() {
   const {
@@ -23,12 +28,56 @@ export default function TablesView() {
     balanceTables,
     deletePlayer,
     bustPlayer,
-    undoTableAction,
+    undoTableActions,
     getTableUndoCount,
+    getTableUndoEntries,
     getWaitingListPlayers,
     saveFloorTeams,
     saveDealerTimers,
   } = useTournament();
+
+  const {
+    state: dealerState,
+    assignDealer,
+  } = useDealerControl(5000);
+
+  const liveNow = useLiveSecond();
+
+  const dealerTableMap = useMemo(() => {
+    const map = new Map<string, {
+      name: string | null;
+      needsDealer: boolean;
+      dealerState: string | null;
+      dealLabel: string | null;
+      rotationLabel: string | null;
+    }>();
+    for (const entry of dealerState.tables) {
+      const staff = entry.dealerId
+        ? dealerState.rotation.staff.find(s => s.id === entry.dealerId)
+        : undefined;
+      const dealSeconds = staff
+        ? getCurrentTableDealSeconds(staff, liveNow, dealerState.rotation.settings)
+        : entry.currentTableDealSeconds;
+      const remainingSeconds = staff
+        ? getDealRemainingSeconds(staff, liveNow)
+        : entry.rotationRemainingSeconds;
+      const timing = formatDealerTableTiming(
+        entry.dealerState ? { state: entry.dealerState as "on_table" | "incoming" } : null,
+        dealSeconds,
+        remainingSeconds,
+      );
+      map.set(entry.id, {
+        name: entry.dealerName,
+        needsDealer: entry.needsDealer,
+        dealerState: entry.dealerState,
+        dealLabel: timing.dealLabel,
+        rotationLabel: timing.rotationLabel,
+      });
+    }
+    return map;
+  }, [dealerState.tables, dealerState.rotation.staff, dealerState.rotation.settings, liveNow]);
+
+  const rotationEnabled = dealerState.rotation.settings.enabled;
 
   const { players, tables, settings } = state;
   const undoCount = getTableUndoCount();
@@ -38,6 +87,7 @@ export default function TablesView() {
   const [qrTableNumber, setQrTableNumber] = useState<number | null>(null);
   const [floorSetupOpen, setFloorSetupOpen] = useState(false);
   const [timerSettingsOpen, setTimerSettingsOpen] = useState(false);
+  const [undoModalOpen, setUndoModalOpen] = useState(false);
 
   const [modal, setModal] = useState<{
     isOpen: boolean;
@@ -199,7 +249,7 @@ export default function TablesView() {
       isOpen: true,
       type: "confirm_bust",
       title: "Eliminate Player",
-      message: `${player.firstName} ${player.lastName} — oyuncuyu silmek istediğinizden emin misiniz?`,
+      message: `${player.firstName} ${player.lastName} — are you sure you want to eliminate this player?`,
       playerIdToBust: playerId,
       playerNameToBust: `${player.firstName} ${player.lastName}`,
     });
@@ -220,7 +270,7 @@ export default function TablesView() {
       isOpen: true,
       type: "confirm_remove_waiting",
       title: "Remove From Waiting List",
-      message: `${player.firstName} ${player.lastName} — waiting list'ten kaldırmak istediğinizden emin misiniz?`,
+      message: `${player.firstName} ${player.lastName} — are you sure you want to remove this player from the waiting list?`,
       playerIdToBust: playerId,
     });
   };
@@ -234,32 +284,61 @@ export default function TablesView() {
 
   const renderTableCard = (table: Table) => {
     const occupants = table.seats.filter(s => s !== null).length;
+    const dealerInfo = dealerTableMap.get(table.id);
+    const needsDealer = rotationEnabled && (dealerInfo?.needsDealer ?? true);
 
     return (
       <div
         key={table.id}
-        className="bg-zinc-900/65 border border-zinc-800 rounded-md p-1.5 shadow-md flex flex-col transition hover:border-zinc-700"
+        className={`bg-zinc-900/65 border rounded-md p-1.5 shadow-md flex flex-col transition ${
+          needsDealer
+            ? "border-red-500/70 animate-pulse shadow-red-500/20"
+            : "border-zinc-800 hover:border-zinc-700"
+        }`}
       >
-        <div className="flex items-center justify-between mb-0.5 gap-1">
-          <div className="flex items-center gap-1 min-w-0">
-            <h2 className="text-[10px] font-black tracking-widest text-amber-400 uppercase leading-none">
-              TABLE {table.number}
-            </h2>
-            <button
-              type="button"
-              onClick={() => setQrTableNumber(table.number)}
-              className="px-1 py-0.5 rounded border border-amber-500/20 bg-amber-500/10 text-[8px] font-black uppercase text-amber-300 hover:bg-amber-500/20"
-              title="Dealer Tablet QR"
-            >
-              <span className="inline-flex items-center gap-0.5">
-                <QrCode className="w-2.5 h-2.5" />
-                QR
-              </span>
-            </button>
+        <div className="flex items-start justify-between mb-0.5 gap-1">
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <div className="flex items-center gap-1 flex-wrap">
+              <h2 className="text-[10px] font-black tracking-widest text-amber-400 uppercase leading-none shrink-0">
+                TABLE {table.number}
+              </h2>
+              <button
+                type="button"
+                onClick={() => setQrTableNumber(table.number)}
+                className="px-1 py-0.5 rounded border border-amber-500/20 bg-amber-500/10 text-[8px] font-black uppercase text-amber-300 hover:bg-amber-500/20 shrink-0"
+                title="Dealer Tablet QR"
+              >
+                <span className="inline-flex items-center gap-0.5">
+                  <QrCode className="w-2.5 h-2.5" />
+                  QR
+                </span>
+              </button>
+            </div>
+            {rotationEnabled ? (
+              <div className="space-y-0.5">
+                <p
+                  className={`text-[9px] font-bold uppercase tracking-wide leading-tight ${
+                    needsDealer ? "text-red-400" : "text-emerald-400/90"
+                  }`}
+                >
+                  {dealerInfo?.name ?? "No dealer assigned"}
+                </p>
+                {dealerInfo?.dealLabel ? (
+                  <p className="text-[8px] font-mono leading-tight text-emerald-400/80">
+                    Deal: {dealerInfo.dealLabel}
+                    {dealerInfo.rotationLabel ? (
+                      <span className="text-amber-400/80"> · Rot: {dealerInfo.rotationLabel}</span>
+                    ) : null}
+                  </p>
+                ) : dealerInfo?.dealerState === "incoming" ? (
+                  <p className="text-[8px] font-bold uppercase text-orange-400/90">Handoff</p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
           <button
             onClick={() => handleDeleteTableClick(table.id, occupants > 0)}
-            className="p-0.5 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded transition"
+            className="p-0.5 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded transition shrink-0"
             title="Delete Table"
           >
             <Trash2 className="w-3 h-3" />
@@ -269,7 +348,7 @@ export default function TablesView() {
         <div className="border-b border-zinc-800/80 mb-0.5" />
 
         <div className="space-y-px">
-          {Array.from({ length: table.seats.length }).map((_, seatIdx) => {
+          {Array.from({ length: Math.min(table.seats.length, 9) }).map((_, seatIdx) => {
             const playerId = table.seats[seatIdx];
             const player = getPlayer(playerId);
 
@@ -323,7 +402,7 @@ export default function TablesView() {
                     className="w-5 h-5 rounded bg-red-950/40 border border-red-900/50 hover:border-red-500 hover:bg-red-500/20 text-red-400 hover:text-red-300 transition flex items-center justify-center shrink-0"
                     title="Eliminate player from tournament"
                   >
-                    <Trash2 className="w-2.5 h-2.5" />
+                    <Skull className="w-2.5 h-2.5" />
                   </button>
                 )}
               </div>
@@ -360,10 +439,10 @@ export default function TablesView() {
             </button>
             <button
               type="button"
-              onClick={undoTableAction}
+              onClick={() => setUndoModalOpen(true)}
               disabled={undoCount === 0}
               className="px-2.5 py-1 bg-zinc-900 border border-zinc-800 hover:border-sky-500/50 hover:bg-sky-500/10 rounded-lg text-[10px] font-bold uppercase tracking-wider transition flex items-center gap-1 text-sky-400 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-zinc-800 disabled:hover:bg-zinc-900"
-              title={undoCount > 0 ? `Undo last action (${undoCount} available)` : "No actions to undo"}
+              title={undoCount > 0 ? `Review and undo table actions (${undoCount} available)` : "No actions to undo"}
             >
               <Undo2 className="w-3.5 h-3.5" />
               Undo
@@ -473,6 +552,45 @@ export default function TablesView() {
               </div>
             )}
           </div>
+
+          {rotationEnabled ? (
+            <div className="mt-3 pt-2 border-t border-zinc-800 shrink-0 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-orange-300">
+                  <UserCog className="w-3 h-3" /> Dealer Pool
+                </div>
+                <span className="text-[9px] font-mono text-zinc-500">
+                  {dealerState.rotation.poolQueue.length + dealerState.rotation.waitingList.length}
+                </span>
+              </div>
+              <div className="max-h-32 overflow-y-auto space-y-1">
+                {[...dealerState.rotation.waitingList, ...dealerState.rotation.poolQueue].map((dealerId) => {
+                  const dealer = dealerState.rotation.staff.find(s => s.id === dealerId);
+                  if (!dealer) return null;
+                  return (
+                    <div key={dealerId} className="rounded border border-zinc-800 bg-zinc-950 px-2 py-1">
+                      <p className="text-[10px] font-bold truncate">{dealerDisplayName(dealer)}</p>
+                      <p className="text-[8px] text-zinc-500 uppercase">{dealer.state}</p>
+                      <select
+                        className="mt-1 w-full rounded border border-zinc-800 bg-zinc-900 text-[9px] py-0.5"
+                        defaultValue=""
+                        onChange={(e) => {
+                          const tableId = e.target.value;
+                          if (tableId) void assignDealer(dealerId, tableId);
+                          e.target.value = "";
+                        }}
+                      >
+                        <option value="">Assign to table...</option>
+                        {tables.map(t => (
+                          <option key={t.id} value={t.id}>Table {t.number}</option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -491,10 +609,19 @@ export default function TablesView() {
 
       {timerSettingsOpen ? (
         <DealerTimerSettingsModal
+          timerMode={settings.dealerTimerMode ?? "call_time"}
           callTimeSeconds={settings.dealerCallTimeSeconds ?? 30}
           playerTimeSeconds={settings.dealerPlayerTimeSeconds ?? 60}
           onSave={saveDealerTimers}
           onClose={() => setTimerSettingsOpen(false)}
+        />
+      ) : null}
+
+      {undoModalOpen ? (
+        <TableUndoModal
+          entries={getTableUndoEntries()}
+          onUndo={(selectedIds) => undoTableActions(selectedIds)}
+          onClose={() => setUndoModalOpen(false)}
         />
       ) : null}
 

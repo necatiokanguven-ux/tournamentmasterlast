@@ -1,0 +1,19 @@
+{
+  "name": "Tournament Master Dealer",
+  "short_name": "Dealer",
+  "description": "Dealer tablet interface for Tournament Master",
+  "start_url": "/dealer/setup",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0B0B0B",
+  "theme_color": "#0B0B0B",
+  "icons": [
+    {
+      "src": "/dealer-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

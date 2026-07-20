@@ -5,19 +5,24 @@
 
 import React, { useEffect, useState, useMemo } from "react";
 import LocalServerBanner from "./components/LocalServerBanner";
+import VenuePortHint from "./components/VenuePortHint";
 import ClockView from "./components/ClockView";
 import SettingsView from "./components/SettingsView";
 import PlayersView from "./components/PlayersView";
 import TablesView from "./components/TablesView";
 import ReportsView from "./components/ReportsView";
+import DealerControlView from "./components/DealerControlView";
 import DisplayView from "./components/DisplayView";
 import LicenseView from "./components/LicenseView";
 import { useLicenseStatus } from "./license/useLicenseStatus";
 import { getLicenseNavStatus } from "./license/licenseDisplay";
 import { tournamentStore } from "./store";
-import { Timer, Settings, Users, Grid, FileText, ChevronLeft, ChevronRight, Monitor, KeyRound, Lock } from "lucide-react";
+import { isWsEnabled } from "./config/featureFlags";
+import { useTournamentSocket } from "./websocket/useTournamentSocket";
+import { isClockChannelPayload } from "./websocket/clockChannelTypes";
+import { Timer, Settings, Users, Grid, FileText, ChevronLeft, ChevronRight, Monitor, KeyRound, Lock, UserCog } from "lucide-react";
 
-type AppTab = "clock" | "license" | "settings" | "players" | "tables" | "reports" | "display";
+type AppTab = "clock" | "license" | "settings" | "players" | "tables" | "dealer-control" | "reports" | "display";
 
 export default function App() {
   const { isLicensed, loading: licenseLoading, status: licenseStatus } = useLicenseStatus();
@@ -25,6 +30,25 @@ export default function App() {
   const [isNavCollapsed, setIsNavCollapsed] = useState(false);
   const [pendingClockFullscreen, setPendingClockFullscreen] = useState(false);
   const [dataReady, setDataReady] = useState(false);
+
+  const wsState = useTournamentSocket({
+    enabled: isWsEnabled(),
+    channels: ["meta", "director", "clock"],
+    onMessage: (message) => {
+      if (message.type !== "delta" && message.type !== "snapshot") return;
+
+      if (message.channel === "clock") {
+        if (isClockChannelPayload(message.payload)) {
+          tournamentStore.applyRemoteClock(message.payload);
+        }
+        return;
+      }
+
+      if (message.channel === "meta" || message.channel === "director") {
+        void tournamentStore.syncFromServer();
+      }
+    },
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -35,10 +59,22 @@ export default function App() {
       }
     });
 
+    const onLicenseUpdated = () => {
+      void tournamentStore.load({ force: true });
+    };
+    window.addEventListener("license-updated", onLicenseUpdated);
+
     return () => {
       cancelled = true;
+      window.removeEventListener("license-updated", onLicenseUpdated);
     };
   }, []);
+
+  useEffect(() => {
+    if (!licenseLoading && isLicensed) {
+      void tournamentStore.load({ force: true });
+    }
+  }, [licenseLoading, isLicensed]);
 
   useEffect(() => {
     if (!licenseLoading && !isLicensed) {
@@ -70,11 +106,17 @@ export default function App() {
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden font-sans flex-col">
       <LocalServerBanner />
+      <VenuePortHint />
+      {wsState.enabled && wsState.reconnecting ? (
+        <div className="bg-orange-500/10 border-b border-orange-500/30 px-4 py-2 text-orange-200 text-xs font-bold uppercase tracking-wider">
+          WebSocket reconnecting — using HTTP fallback until live push returns
+        </div>
+      ) : null}
       {!licenseLoading && !isLicensed && (
         <div className="bg-red-500/10 border-b border-red-500/30 px-4 py-3 text-red-200 text-sm flex items-start gap-2">
           <Lock className="w-4 h-4 mt-0.5 shrink-0 text-red-400" />
           <p>
-            Install the local server, open <strong className="text-red-100">License Key</strong>, sign in to PokerClup, and choose trial or a paid plan.
+            Install the local server, open <strong className="text-red-100">License Key</strong>, enter your existing license key or sign in to PokerClup for trial or a paid plan.
             {licenseStatus?.message ? ` ${licenseStatus.message}` : ""}
           </p>
         </div>
@@ -94,7 +136,7 @@ export default function App() {
             {!isNavCollapsed && (
               <div className="flex items-center gap-2">
                 <span className="text-xl">♠️</span>
-                <span className="font-black tracking-wider uppercase text-sm">DIRECTOR PRO</span>
+                <span className="font-black tracking-wider uppercase text-sm">TM STANDART</span>
               </div>
             )}
             <button 
@@ -114,6 +156,7 @@ export default function App() {
               { id: "tables", label: "Tables", icon: Grid, color: "text-emerald-500" },
               { id: "players", label: "Player Management", icon: Users, color: "text-blue-500" },
               { id: "settings", label: "Tournament Setup", icon: Settings, color: "text-amber-500" },
+              { id: "dealer-control", label: "Dealer Control", icon: UserCog, color: "text-orange-500" },
               { id: "reports", label: "Tournament Reports", icon: FileText, color: "text-purple-500" }
             ].map((nav) => {
               const Icon = nav.icon;
@@ -219,6 +262,7 @@ export default function App() {
         {dataReady && activeTab === "settings" && isLicensed && <SettingsView />}
         {dataReady && activeTab === "players" && isLicensed && <PlayersView />}
         {dataReady && activeTab === "tables" && isLicensed && <TablesView />}
+        {dataReady && activeTab === "dealer-control" && isLicensed && <DealerControlView />}
         {dataReady && activeTab === "reports" && isLicensed && <ReportsView />}
         {!licenseLoading && !isLicensed && activeTab !== "license" && <LicenseView />}
       </main>

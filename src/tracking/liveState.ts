@@ -1,5 +1,13 @@
 import { BlindLevel, ClockState, Player, PayoutStructure, TournamentCurrency, TournamentSettings } from "../types";
 import { getCurrencyConfig, normalizeTournamentCurrency } from "../currency";
+import {
+  calculateTimeToNextBreakLabel,
+  getEffectiveClock,
+} from "../clockLive";
+import {
+  getNextLevelDisplay,
+  getPlayingLevelNumber,
+} from "../blindStructureUtils";
 
 export type TrackingLiveState = {
   version: number;
@@ -8,11 +16,14 @@ export type TrackingLiveState = {
   currency: TournamentCurrency;
   currencySymbol: string;
   currentLevel: number;
+  currentLevelIndex: number;
   isBreak: boolean;
   currentBlinds: string;
   nextBlinds: string | null;
   timeRemaining: number;
   isRunning: boolean;
+  /** Wall-clock ms when timeRemaining was last synced — client extrapolates between polls. */
+  syncedAtMs?: number | null;
   remainingPlayers: number;
   totalPlayers: number;
   playersDisplay: string;
@@ -139,11 +150,13 @@ export function normalizeTrackingLiveState(state: TrackingLiveStateInput): Track
     currency,
     currencySymbol,
     currentLevel: typeof state.currentLevel === "number" ? state.currentLevel : 1,
+    currentLevelIndex: typeof state.currentLevelIndex === "number" ? state.currentLevelIndex : 0,
     isBreak: Boolean(state.isBreak),
     currentBlinds: state.currentBlinds ?? "-",
     nextBlinds: state.nextBlinds ?? null,
     timeRemaining: typeof state.timeRemaining === "number" ? state.timeRemaining : 0,
     isRunning: Boolean(state.isRunning),
+    syncedAtMs: state.syncedAtMs ?? null,
     remainingPlayers: typeof state.remainingPlayers === "number" ? state.remainingPlayers : 0,
     totalPlayers: typeof state.totalPlayers === "number" ? state.totalPlayers : 0,
     playersDisplay: state.playersDisplay ?? "-",
@@ -174,22 +187,6 @@ function formatBlinds(level: BlindLevel): string {
     return `${level.smallBlind.toLocaleString()} / ${level.bigBlind.toLocaleString()} (${level.ante.toLocaleString()})`;
   }
   return `${level.smallBlind.toLocaleString()} / ${level.bigBlind.toLocaleString()}`;
-}
-
-function formatDuration(secs: number): string {
-  const h = Math.floor(secs / 3600).toString().padStart(2, "0");
-  const m = Math.floor((secs % 3600) / 60).toString().padStart(2, "0");
-  const s = (secs % 60).toString().padStart(2, "0");
-  return `${h}:${m}:${s}`;
-}
-
-function getNextNonBreakLevel(structure: BlindLevel[], startIndex: number): BlindLevel | null {
-  for (let i = startIndex; i < structure.length; i++) {
-    if (!structure[i]?.isBreak) {
-      return structure[i];
-    }
-  }
-  return null;
 }
 
 function getCurrentBigBlind(structure: BlindLevel[], levelIndex: number): number {
@@ -244,36 +241,22 @@ function calculatePrizePool(settings: TournamentSettings, players: Player[]): nu
     : calculatedPrizePool;
 }
 
-function calculateTimeToNextBreak(settings: TournamentSettings, clock: ClockState): string {
-  let secs = clock.timeRemaining;
-
-  for (let i = clock.currentLevelIndex + 1; i < settings.blindStructure.length; i++) {
-    const level = settings.blindStructure[i];
-    if (level.isBreak) {
-      break;
-    }
-    secs += level.duration * 60;
-  }
-
-  return formatDuration(secs);
-}
-
 export function buildTrackingLiveState(input: BuildLiveStateInput): TrackingLiveState {
-  const { settings, clock, players, payouts } = input;
+  const { settings, players, payouts } = input;
+  const rawClock = input.clock;
+  const effectiveClock = getEffectiveClock(rawClock);
   const resolvedPayouts = resolveTrackingPayouts(settings, players, payouts);
   const structure = settings.blindStructure;
-  const activeLevel = structure[clock.currentLevelIndex] ?? structure[0];
+  const activeLevel = structure[effectiveClock.currentLevelIndex] ?? structure[0];
   const playingPlayers = players.filter((player) => player.status === "Playing" || player.status === "Waiting");
   const remainingPlayers = playingPlayers.length;
   const totalPlayers = players.length;
   const totalChipsInPlay = players.reduce((sum, player) => sum + player.chips, 0);
   const averageStack = remainingPlayers > 0 ? Math.round(totalChipsInPlay / remainingPlayers) : 0;
 
-  const currentStandardLevel =
-    structure.slice(0, clock.currentLevelIndex + 1).filter((level) => !level.isBreak).pop()?.level ?? 1;
-
-  const nextLevel = getNextNonBreakLevel(structure, clock.currentLevelIndex + 1);
-  const currentBigBlind = getCurrentBigBlind(structure, clock.currentLevelIndex);
+  const currentLevel = getPlayingLevelNumber(structure, effectiveClock.currentLevelIndex);
+  const nextLevelDisplay = getNextLevelDisplay(structure, effectiveClock.currentLevelIndex);
+  const currentBigBlind = getCurrentBigBlind(structure, effectiveClock.currentLevelIndex);
   const averageStackBB = currentBigBlind > 0 ? Math.round(averageStack / currentBigBlind) : 0;
   const currency = normalizeTournamentCurrency(settings.currency);
   const currencySymbol = getCurrencyConfig(currency).symbol;
@@ -288,14 +271,18 @@ export function buildTrackingLiveState(input: BuildLiveStateInput): TrackingLive
     tournamentName: settings.name,
     currency,
     currencySymbol,
-  currentLevel: activeLevel?.isBreak
-    ? currentStandardLevel
-    : (activeLevel?.level && activeLevel.level > 0 ? activeLevel.level : currentStandardLevel),
+    currentLevel,
+    currentLevelIndex: rawClock.currentLevelIndex,
     isBreak: Boolean(activeLevel?.isBreak),
     currentBlinds: activeLevel ? formatBlinds(activeLevel) : "-",
-    nextBlinds: nextLevel ? formatBlinds(nextLevel) : null,
-    timeRemaining: clock.timeRemaining,
-    isRunning: clock.isRunning,
+    nextBlinds: nextLevelDisplay
+      ? (nextLevelDisplay.isBreak
+        ? `BREAK · ${nextLevelDisplay.detail}`
+        : nextLevelDisplay.detail)
+      : null,
+    timeRemaining: rawClock.timeRemaining,
+    isRunning: rawClock.isRunning,
+    syncedAtMs: rawClock.syncedAtMs ?? null,
     remainingPlayers,
     totalPlayers,
     playersDisplay: `${totalPlayers}/${remainingPlayers}`,
@@ -308,7 +295,7 @@ export function buildTrackingLiveState(input: BuildLiveStateInput): TrackingLive
       percentage: payout.percentage,
       amount: payout.amount,
     })),
-    nextBreak: calculateTimeToNextBreak(settings, clock),
+    nextBreak: calculateTimeToNextBreakLabel(settings, effectiveClock),
     isBubbleTime,
     isFinalTable,
     playersToItm,
@@ -347,6 +334,7 @@ function hasStructuralLiveStateChange(
     current.currency !== incoming.currency ||
     current.currencySymbol !== incoming.currencySymbol ||
     current.currentLevel !== incoming.currentLevel ||
+    current.currentLevelIndex !== incoming.currentLevelIndex ||
     current.isBreak !== incoming.isBreak ||
     current.currentBlinds !== incoming.currentBlinds ||
     current.nextBlinds !== incoming.nextBlinds ||
@@ -393,20 +381,23 @@ export function mergeTrackingLiveState(
   }
 
   const normalizedCurrent = normalizeTrackingLiveState(current);
+  const base = hasStructuralLiveStateChange(normalizedCurrent, normalizedIncoming)
+    ? normalizedIncoming
+    : {
+        ...normalizedCurrent,
+        payouts:
+          normalizedIncoming.payouts.length > 0
+            ? normalizedIncoming.payouts
+            : normalizedCurrent.payouts,
+      };
 
-  if (hasStructuralLiveStateChange(normalizedCurrent, normalizedIncoming)) {
-    return normalizedIncoming;
-  }
-
-  const drift = Math.abs(normalizedCurrent.timeRemaining - normalizedIncoming.timeRemaining);
-  if (drift >= 3) {
-    return {
-      ...normalizedCurrent,
-      timeRemaining: normalizedIncoming.timeRemaining,
-      serverTime: normalizedIncoming.serverTime,
-      version: normalizedIncoming.version,
-    };
-  }
-
-  return normalizedCurrent;
+  return {
+    ...base,
+    timeRemaining: normalizedIncoming.timeRemaining,
+    nextBreak: normalizedIncoming.nextBreak,
+    isRunning: normalizedIncoming.isRunning,
+    syncedAtMs: normalizedIncoming.syncedAtMs,
+    serverTime: normalizedIncoming.serverTime,
+    version: normalizedIncoming.version,
+  };
 }

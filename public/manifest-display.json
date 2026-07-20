@@ -1,0 +1,19 @@
+{
+  "name": "Tournament Master Venue Display",
+  "short_name": "Venue Clock",
+  "description": "Menu-free tournament clock for venue TVs",
+  "start_url": "/display",
+  "scope": "/display",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "icons": [
+    {
+      "src": "/dealer-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
