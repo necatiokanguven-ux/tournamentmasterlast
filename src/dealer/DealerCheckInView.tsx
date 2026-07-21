@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { localApi } from "../config/api";
 import { dealerHref } from "./dealerPaths";
-import DealerAssignmentOverlay, { hasActiveDealerDuty } from "./DealerAssignmentOverlay";
+import DealerAssignmentOverlay from "./DealerAssignmentOverlay";
 import DealerLoungeStatus from "./DealerLoungeStatus";
 import DealerPhoneSessionBar from "./DealerPhoneSessionBar";
 import { formatPhoneDutyLabel, formatWelcomeMessage } from "./dealerDutyLabel";
-import { readDealerIdentity, writeDealerIdentity } from "./dealerIdentity";
+import { readDealerIdentity, switchDealerIdentity, writeDealerIdentity } from "./dealerIdentity";
+import { writeStoredConfig } from "./DealerSetupView";
+import { dealerAssignedToTable } from "./dealerTableAccess";
 import { useDealerPhoneAction } from "./useDealerPhoneAction";
 
 type ActiveStaff = {
@@ -23,9 +25,10 @@ export default function DealerCheckInView() {
   const [selectedId, setSelectedId] = useState<string | null>(() => readDealerIdentity()?.dealerId ?? null);
   const [loading, setLoading] = useState(true);
   const [overlayActive, setOverlayActive] = useState(false);
+  const [switching, setSwitching] = useState(false);
 
-  const { action, dealer: me, serverTime, tBreakMinutes, tournamentBreak } = useDealerPhoneAction(selectedId, 1000);
-  const dutyActive = hasActiveDealerDuty(action);
+  const { action, dealer: me, serverTime, tBreakMinutes, tDealMinutes, tournamentBreak } =
+    useDealerPhoneAction(selectedId, 1000);
 
   const loadStaff = useCallback(async () => {
     const response = await fetch(localApi("/api/dealer-control/staff/active"));
@@ -38,8 +41,30 @@ export default function DealerCheckInView() {
     void loadStaff().finally(() => setLoading(false));
   }, [loadStaff]);
 
-  const handleSelectDealer = (dealerId: string) => {
-    setSelectedId(dealerId || null);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("switch") !== "1") return;
+
+    setSwitching(true);
+    void switchDealerIdentity().then(() => {
+      setSelectedId(null);
+      window.history.replaceState({}, "", dealerHref("/dealer/checkin"));
+      setSwitching(false);
+    });
+  }, []);
+
+  const handleSelectDealer = async (dealerId: string) => {
+    if (!dealerId) {
+      await switchDealerIdentity();
+      setSelectedId(null);
+      return;
+    }
+
+    if (selectedId && selectedId !== dealerId) {
+      await switchDealerIdentity();
+    }
+
+    setSelectedId(dealerId);
     const entry = staff.find(s => s.id === dealerId);
     if (entry) {
       writeDealerIdentity({
@@ -50,6 +75,13 @@ export default function DealerCheckInView() {
         lastName: entry.lastName,
       });
     }
+  };
+
+  const handleChangeDealer = async () => {
+    setSwitching(true);
+    await switchDealerIdentity();
+    setSelectedId(null);
+    setSwitching(false);
   };
 
   const selected = staff.find(s => s.id === selectedId);
@@ -88,24 +120,43 @@ export default function DealerCheckInView() {
         returnTableNumber: me?.tableNumber ?? null,
       })
     : null;
-  const showTableLink = !dutyActive && !overlayActive && !tournamentBreak.active
-    && me?.state === "on_table" && me.tableNumber;
+  const showTableLink = !overlayActive && !tournamentBreak.active
+    && me?.tableNumber != null
+    && dealerAssignedToTable(me, me.tableNumber);
+
+  const handleOpenTableScreen = () => {
+    if (!me?.tableNumber) return;
+    writeStoredConfig({
+      tableNumber: me.tableNumber,
+      setupLocked: true,
+      deviceType: "phone",
+    });
+    window.location.assign(dealerHref(`/dealer/${me.tableNumber}?device=phone`));
+  };
   const sessionOpen = Boolean(selectedId && sessionStaff);
+  const changeDealerHref = dealerHref("/dealer/checkin?switch=1");
 
   return (
     <div className={`min-h-screen bg-zinc-950 text-zinc-100 px-4 ${sessionOpen ? "pt-14 pb-6" : "py-6"}`}>
-      {dutyLabel && !overlayActive ? <DealerPhoneSessionBar dutyLabel={dutyLabel} /> : null}
+      {dutyLabel && !overlayActive ? (
+        <DealerPhoneSessionBar
+          dutyLabel={dutyLabel}
+          changeDealerHref={changeDealerHref}
+          onChangeDealer={() => void handleChangeDealer()}
+        />
+      ) : null}
 
       {selected ? (
         <DealerAssignmentOverlay
           dealerId={selected.id}
           displayName={selected.displayName}
           dutyLabel={dutyLabel}
+          changeDealerHref={changeDealerHref}
           onActiveChange={setOverlayActive}
         />
       ) : null}
 
-      {!dutyActive && !overlayActive ? (
+      {!overlayActive ? (
         <div className="mx-auto max-w-lg space-y-4">
           <header className="rounded-3xl border border-amber-500/30 bg-zinc-900 p-5">
             <p className="text-[10px] font-black uppercase tracking-[0.25em] text-amber-400">Staff Check-In</p>
@@ -115,14 +166,32 @@ export default function DealerCheckInView() {
             </p>
           </header>
 
-          {loading ? (
-            <p className="text-sm text-zinc-500">Loading roster...</p>
+          {action.kind === "upcoming_task" ? (
+            <div className="rounded-2xl border border-amber-500/50 bg-amber-500/15 p-4 text-center">
+              <p className="text-[10px] font-black uppercase tracking-[0.25em] text-amber-300">Upcoming Task</p>
+              <p className="mt-2 text-base font-black uppercase tracking-wide text-amber-100">
+                {action.taskKind === "table_deal" && action.tableNumber != null
+                  ? `Table ${action.tableNumber} deal`
+                  : action.taskKind === "return_to_table" && action.tableNumber != null
+                    ? `Return to Table ${action.tableNumber}`
+                    : action.taskKind === "rotation_end" && action.tableNumber != null
+                      ? `Table ${action.tableNumber} rotation ends`
+                      : action.tableNumber != null
+                        ? `Table ${action.tableNumber}`
+                        : "Upcoming assignment"}
+              </p>
+              <p className="mt-2 text-sm font-bold leading-relaxed text-amber-50">{action.message}</p>
+            </div>
+          ) : null}
+
+          {loading || switching ? (
+            <p className="text-sm text-zinc-500">{switching ? "Switching dealer..." : "Loading roster..."}</p>
           ) : (
             <label className="block rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
               <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Your Name</span>
               <select
                 value={selectedId ?? ""}
-                onChange={(e) => handleSelectDealer(e.target.value)}
+                onChange={(e) => void handleSelectDealer(e.target.value)}
                 className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-3 text-sm font-bold"
               >
                 <option value="">Select staff member...</option>
@@ -132,36 +201,44 @@ export default function DealerCheckInView() {
                   </option>
                 ))}
               </select>
+              {selectedId ? (
+                <button
+                  type="button"
+                  onClick={() => void handleChangeDealer()}
+                  className="mt-3 w-full rounded-xl border border-zinc-700 bg-zinc-950 py-2.5 text-[10px] font-bold uppercase tracking-wider text-zinc-400 hover:text-zinc-200"
+                >
+                  Wrong person? Clear and reselect
+                </button>
+              ) : null}
             </label>
           )}
 
           {selected && sessionStaff ? (
             <div className="space-y-3">
-              <div className="rounded-2xl border border-emerald-500/35 bg-emerald-500/10 p-5 text-center">
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400/90">Welcome</p>
-                <p className="mt-3 text-lg font-bold leading-relaxed text-emerald-50">
-                  {formatWelcomeMessage(sessionStaff)}
-                </p>
-              </div>
+              {showTableLink ? (
+                <button
+                  type="button"
+                  onClick={handleOpenTableScreen}
+                  className="block w-full rounded-2xl border border-emerald-400/50 bg-emerald-500 py-4 text-center text-base font-black uppercase tracking-wider text-black shadow-lg shadow-emerald-500/20"
+                >
+                  Open Table {me!.tableNumber}
+                </button>
+              ) : null}
 
               {me ? (
                 <DealerLoungeStatus
                   dealer={me}
                   serverTime={serverTime}
                   tBreakMinutes={tBreakMinutes}
+                  tDealMinutes={tDealMinutes}
                   tournamentBreakActive={tournamentBreak.active}
                   tournamentBreakEndAt={tournamentBreak.breakEndAt}
                 />
               ) : null}
 
-              {showTableLink ? (
-                <a
-                  href={dealerHref(`/dealer/${me!.tableNumber}?device=phone`)}
-                  className="block w-full rounded-xl border border-zinc-700 bg-zinc-950 py-3 text-center text-sm font-black uppercase tracking-wider text-zinc-200"
-                >
-                  Open Table Screen
-                </a>
-              ) : null}
+              <p className="text-center text-xs text-zinc-500 px-2">
+                {formatWelcomeMessage(sessionStaff)}
+              </p>
             </div>
           ) : null}
         </div>

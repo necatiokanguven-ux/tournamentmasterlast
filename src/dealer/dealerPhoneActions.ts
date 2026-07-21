@@ -1,20 +1,31 @@
 import type { DealerStaff } from "../server/dealerRotation/types";
-import { isOutgoingHandoffWait } from "../dealerRotation/dealerTimeUtils";
+import {
+  findBlockingOutgoingHandoff,
+  isOutgoingHandoffWait,
+} from "../dealerRotation/dealerTimeUtils";
 import { hasPendingEmergency } from "../dealerRotation/dealerEmergencyUtils";
 import type { TournamentBreakStatus } from "../server/dealerRotation/RotationTriggerService";
+import { formatUpcomingTaskBanner } from "./upcomingTaskMessages";
+import type { UpcomingTaskKind } from "../server/dealerRotation/types";
 
 export type DealerPhoneContext = {
   tournamentBreak?: TournamentBreakStatus;
+  staff?: DealerStaff[];
+  serverTime?: number;
 };
 
 export type DealerPhoneAction =
   | { kind: "none" }
   | { kind: "emergency_call"; message: string }
   | { kind: "go_to_table"; tableNumber: number; tableId: string; message: string }
+  | { kind: "wait_for_handoff"; tableNumber: number; message: string }
   | { kind: "rotation_ended"; tableNumber: number; message: string }
   | { kind: "go_to_break"; message: string; breakEndAt: string | null; needsAccept: boolean; returnTableNumber: number | null }
   | { kind: "on_waiting"; message: string }
-  | { kind: "in_pool"; message: string };
+  | { kind: "in_pool"; message: string }
+  | { kind: "upcoming_task"; message: string; tableNumber: number | null; taskKind?: UpcomingTaskKind | null };
+
+const UPCOMING_TASK_TTL_MS = 4 * 60_000;
 
 export function needsDutyAck(
   dealer: Pick<DealerStaff, "lastDutyChangeAt" | "dutyAckAt">,
@@ -24,9 +35,19 @@ export function needsDutyAck(
   return new Date(dealer.dutyAckAt).getTime() < new Date(dealer.lastDutyChangeAt).getTime();
 }
 
+function isRecentUnreadUpcoming(
+  note: { type: string; readAt: string | null; createdAt: string } | null | undefined,
+  now = Date.now(),
+): boolean {
+  if (!note || note.type !== "UPCOMING_TASK" || note.readAt) return false;
+  const created = new Date(note.createdAt).getTime();
+  return Number.isFinite(created) && now - created <= UPCOMING_TASK_TTL_MS;
+}
+
 export function getDealerPhoneAction(
   dealer: Pick<
     DealerStaff,
+    | "id"
     | "state"
     | "tableId"
     | "tableNumber"
@@ -38,9 +59,17 @@ export function getDealerPhoneAction(
     | "emergencyCallAt"
     | "emergencyAckAt"
   >,
-  latestNotification?: { type: string; message: string } | null,
+  latestNotification?: {
+    type: string;
+    message: string;
+    tableNumber?: number | null;
+    taskKind?: UpcomingTaskKind | null;
+    readAt?: string | null;
+    createdAt?: string;
+  } | null,
   context: DealerPhoneContext = {},
 ): DealerPhoneAction {
+  const now = context.serverTime ?? Date.now();
   const tournamentBreakActive = Boolean(context.tournamentBreak?.active);
   const tournamentBreakEndAt = context.tournamentBreak?.breakEndAt ?? null;
 
@@ -68,8 +97,21 @@ export function getDealerPhoneAction(
     };
   }
 
+  if (isRecentUnreadUpcoming(latestNotification)) {
+    return {
+      kind: "upcoming_task",
+      message: formatUpcomingTaskBanner({
+        message: latestNotification!.message,
+        tableNumber: latestNotification!.tableNumber ?? null,
+        taskKind: latestNotification!.taskKind ?? null,
+      }),
+      tableNumber: latestNotification!.tableNumber ?? null,
+      taskKind: latestNotification!.taskKind ?? null,
+    };
+  }
+
   if (dealer.state === "incoming" && dealer.tableId && dealer.tableNumber) {
-    if (isOutgoingHandoffWait(dealer as DealerStaff)) {
+    if (isOutgoingHandoffWait(dealer as DealerStaff, now)) {
       if (!dealer.releaseAckAt) {
         return {
           kind: "rotation_ended",
@@ -79,6 +121,18 @@ export function getDealerPhoneAction(
         };
       }
       return { kind: "none" };
+    }
+
+    const blockingOutgoing = context.staff && dealer.tableId
+      ? findBlockingOutgoingHandoff(context.staff, dealer.tableId, dealer.id, now)
+      : undefined;
+
+    if (blockingOutgoing) {
+      return {
+        kind: "wait_for_handoff",
+        tableNumber: dealer.tableNumber,
+        message: `Wait for the dealer at Table ${dealer.tableNumber} to accept their release before you can take the table.`,
+      };
     }
 
     return {

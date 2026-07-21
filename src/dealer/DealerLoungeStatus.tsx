@@ -1,10 +1,12 @@
 import DealerBreakCountdown from "./DealerBreakCountdown";
+import { formatTableDealDuration, getDealRemainingSeconds } from "../dealerRotation/dealerTimeUtils";
 import type { DealerStaff } from "../server/dealerRotation/types";
 
 type DealerLoungeStatusProps = {
-  dealer: Pick<DealerStaff, "state" | "tableNumber" | "breakEndAt" | "breakStartedAt">;
+  dealer: Pick<DealerStaff, "state" | "tableNumber" | "breakEndAt" | "breakStartedAt" | "dealEndAt">;
   serverTime?: number;
   tBreakMinutes?: number;
+  tDealMinutes?: number;
   tournamentBreakActive?: boolean;
   tournamentBreakEndAt?: string | null;
 };
@@ -12,18 +14,30 @@ type DealerLoungeStatusProps = {
 export default function DealerLoungeStatus({
   dealer,
   serverTime,
-  tBreakMinutes = 15,
+  tBreakMinutes = 30,
+  tDealMinutes = 30,
   tournamentBreakActive = false,
   tournamentBreakEndAt = null,
 }: DealerLoungeStatusProps) {
   const breakEndAt = tournamentBreakEndAt ?? dealer.breakEndAt;
+  const nowMs = serverTime ?? Date.now();
 
   if (dealer.state === "on_table" && dealer.tableNumber && !tournamentBreakActive) {
+    const rotationRemaining = getDealRemainingSeconds(dealer, nowMs);
     return (
       <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 p-6 text-center">
         <p className="text-[10px] font-black uppercase tracking-[0.25em] text-emerald-300">Active Table</p>
         <p className="mt-2 text-5xl font-black text-emerald-200">Table {dealer.tableNumber}</p>
-        <p className="mt-3 text-sm text-emerald-200/80">You are dealing. Open the table screen when ready.</p>
+        {rotationRemaining != null ? (
+          <p className="mt-3 text-sm font-bold text-emerald-200/90">
+            Rotation in {formatTableDealDuration(rotationRemaining)}
+            <span className="block mt-1 text-[10px] font-normal uppercase tracking-wider text-emerald-300/70">
+              Table deal {tDealMinutes} min
+            </span>
+          </p>
+        ) : (
+          <p className="mt-3 text-sm text-emerald-200/80">You are dealing. Open the table screen when ready.</p>
+        )}
       </div>
     );
   }
@@ -54,6 +68,9 @@ export default function DealerLoungeStatus({
           {dealer.tableNumber
             ? "Leave your table now. Your assignment is saved — head back when the countdown ends."
             : "You will be notified when a new assignment arrives."}
+        </p>
+        <p className="mt-2 text-[10px] uppercase tracking-wider text-sky-300/60">
+          Break {tBreakMinutes} min
         </p>
       </div>
     );

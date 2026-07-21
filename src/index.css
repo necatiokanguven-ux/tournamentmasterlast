@@ -140,6 +140,14 @@ body.venue-display-kiosk:-webkit-full-screen {
   animation: venue-hint-fade 12s ease forwards;
 }
 
+.kiosk-fullscreen-bar--tv {
+  animation: venue-hint-fade 12s ease forwards;
+}
+
+.kiosk-fullscreen-globe {
+  touch-action: manipulation;
+}
+
 @keyframes venue-hint-fade {
   0%,
   85% {
@@ -311,4 +319,36 @@ body.dealer-kiosk {
 body.dealer-kiosk #root {
   min-height: 100dvh;
   min-height: 100svh;
+}
+
+html.dealer-tablet-landscape,
+body.dealer-tablet-landscape {
+  overflow: hidden;
+  touch-action: manipulation;
+}
+
+body.dealer-tablet-landscape #root {
+  min-height: 100dvh;
+  min-height: 100svh;
+  overflow: hidden;
+}
+
+@media (orientation: portrait) {
+  body.dealer-tablet-landscape #root::before {
+    content: "Rotate device to landscape";
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0b0b0b;
+    color: #fbbf24;
+    font-size: 1.25rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    text-align: center;
+    padding: 2rem;
+  }
 }

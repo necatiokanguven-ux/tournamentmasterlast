@@ -11,6 +11,7 @@ type DealerAssignmentOverlayProps = {
   dealerId: string;
   displayName: string;
   dutyLabel?: string | null;
+  changeDealerHref?: string;
   onActiveChange?: (active: boolean) => void;
 };
 
@@ -88,6 +89,18 @@ function renderActionContent(
           >
             Going To Table
           </button>
+        </>
+      );
+
+    case "wait_for_handoff":
+      return (
+        <>
+          <p className="text-[11px] font-black uppercase tracking-[0.3em] text-amber-400">Waiting For Handoff</p>
+          <p className="mt-4 text-7xl font-black text-zinc-100">Table {action.tableNumber}</p>
+          <p className="mt-4 text-sm font-bold leading-relaxed text-amber-100">{action.message}</p>
+          <p className="mt-6 rounded-2xl border border-zinc-700 bg-zinc-900/80 px-4 py-3 text-xs text-zinc-400">
+            The outgoing dealer must accept their release first. This screen will update automatically.
+          </p>
         </>
       );
 
@@ -179,6 +192,7 @@ export default function DealerAssignmentOverlay({
   dealerId,
   displayName,
   dutyLabel,
+  changeDealerHref,
   onActiveChange,
 }: DealerAssignmentOverlayProps) {
   const { action, dealer, serverTime, tBreakMinutes, tournamentBreak } = useDealerPhoneAction(dealerId, 1000);
@@ -202,7 +216,11 @@ export default function DealerAssignmentOverlay({
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || "Request failed.");
+        const code = String(data.error ?? "");
+        if (code === "OUTGOING_HANDOFF_PENDING") {
+          throw new Error("Wait for the dealer at the table to accept their release before you can take the table.");
+        }
+        throw new Error(code || "Request failed.");
       }
     } catch (postError) {
       setError(postError instanceof Error ? postError.message : "Request failed.");
@@ -223,7 +241,9 @@ export default function DealerAssignmentOverlay({
         isEmergency ? "bg-red-950" : "bg-black/97"
       }`}
     >
-      {dutyLabel ? <DealerPhoneSessionBar dutyLabel={dutyLabel} /> : null}
+      {dutyLabel ? (
+        <DealerPhoneSessionBar dutyLabel={dutyLabel} changeDealerHref={changeDealerHref} />
+      ) : null}
       <div className={`flex flex-1 items-center justify-center p-4 ${dutyLabel ? "pt-14" : ""}`}>
         <div className="w-full max-w-md text-center">
           {renderActionContent(

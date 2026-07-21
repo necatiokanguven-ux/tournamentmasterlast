@@ -1660,7 +1660,7 @@ export default function ClockView({
         {/* Logo: right side, vertically aligned with prize payout row */}
         <div className="flex items-center justify-end shrink-0 self-end md:self-center pr-1 md:pr-2 mt-[15px]" id="footer-logo-block">
           <img 
-            src="/logo.png?v=1.0.7" 
+            src="/logo.png?v=1.0.8" 
             alt="Club Poker Logo" 
             className="h-24 sm:h-28 md:h-32 lg:h-36 w-auto max-w-[200px] sm:max-w-[240px] md:max-w-[280px] object-contain bg-transparent border-0 drop-shadow-[0_4px_16px_rgba(255,255,255,0.08)]"
             referrerPolicy="no-referrer"

@@ -1,6 +1,14 @@
 import { getHttpMetricsSnapshot, type HttpMetricsSnapshot } from "./httpMetrics";
 import { getHostMetricsSnapshot } from "./hostMetrics";
 import {
+  ESCALATE_HOLD_MS,
+  RECOVER_HOLD_MS,
+  evaluateSystemHealth,
+  getDisplayStatus,
+  type ProtectionContext,
+  type SystemHealthStatus,
+} from "./healthThresholds";
+import {
   describeTuningChange,
   getRuntimeTuningState,
   isAutoProtectionEnabled,
@@ -9,52 +17,15 @@ import {
 } from "./runtimeTuning";
 import { appendTuningAudit, seedBaselineAudit } from "./tuningAuditLog";
 
-export type SystemHealthStatus = "green" | "yellow" | "orange" | "red";
+export type { SystemHealthStatus } from "./healthThresholds";
 
-const ESCALATE_HOLD_MS = 30_000;
-const RECOVER_HOLD_MS = 120_000;
 const TICK_MS = 5_000;
 
 let stressStartedAt: number | null = null;
 let calmStartedAt: number | null = null;
-let lastStatus: SystemHealthStatus = "green";
+let lastDisplayStatus: SystemHealthStatus = "green";
+let lastEvaluation: ReturnType<typeof evaluateSystemHealth> | null = null;
 let baselineSeeded = false;
-
-function evaluateRawStatus(
-  host: ReturnType<typeof getHostMetricsSnapshot>,
-  http: HttpMetricsSnapshot,
-): SystemHealthStatus {
-  // RAM is shown in the UI for operator awareness only — Windows manages memory
-  // cache aggressively on 8 GB venue PCs; OS RAM % caused false orange/red alarms.
-  if (
-    host.cpuPercent >= 90
-    || host.eventLoopLagMs >= 400
-    || http.errorRatePercent >= 5
-    || http.overallP95Ms >= 3_000
-  ) {
-    return "red";
-  }
-
-  if (
-    host.cpuPercent >= 80
-    || host.eventLoopLagMs >= 200
-    || http.overallP95Ms >= 2_000
-    || http.totalReqPerSec >= 35
-  ) {
-    return "orange";
-  }
-
-  if (
-    host.cpuPercent >= 70
-    || host.eventLoopLagMs >= 120
-    || http.overallP95Ms >= 1_000
-    || http.totalReqPerSec >= 22
-  ) {
-    return "yellow";
-  }
-
-  return "green";
-}
 
 function targetLevelForStatus(status: SystemHealthStatus): ThrottleLevel {
   switch (status) {
@@ -69,25 +40,52 @@ function targetLevelForStatus(status: SystemHealthStatus): ThrottleLevel {
   }
 }
 
+function formatReason(
+  host: ReturnType<typeof getHostMetricsSnapshot>,
+  http: HttpMetricsSnapshot,
+  evaluation: ReturnType<typeof evaluateSystemHealth>,
+  heldSec: number,
+): string {
+  const p95Label = http.p95Reliable ? `${http.overallP95Ms}ms` : "n/a (low traffic)";
+  const triggerHint = evaluation.triggers.length > 0 ? ` — ${evaluation.triggers.join(", ")}` : "";
+  return `Load held ${heldSec}s — CPU ${host.cpuPercent}%, p95 ${p95Label}, ${http.totalReqPerSec} req/s${triggerHint}`;
+}
+
 export function getSystemHealthStatus(): SystemHealthStatus {
-  return lastStatus;
+  return lastDisplayStatus;
+}
+
+export function getLastHealthEvaluation() {
+  return lastEvaluation;
 }
 
 export function tickAutoProtection(
   host: ReturnType<typeof getHostMetricsSnapshot>,
   http: HttpMetricsSnapshot,
+  context: ProtectionContext,
 ): { status: SystemHealthStatus; levelChanged: boolean } {
-  if (!isAutoProtectionEnabled()) {
-    lastStatus = evaluateRawStatus(host, http);
-    return { status: lastStatus, levelChanged: false };
-  }
+  const evaluation = evaluateSystemHealth(host, http, context);
+  lastEvaluation = evaluation;
 
-  const rawStatus = evaluateRawStatus(host, http);
-  const now = Date.now();
   const tuning = getRuntimeTuningState();
   let levelChanged = false;
 
-  if (rawStatus !== "green") {
+  if (!isAutoProtectionEnabled() || evaluation.inGracePeriod) {
+    if (tuning.level > 0) {
+      setThrottleLevel(0);
+      levelChanged = true;
+    }
+    stressStartedAt = null;
+    calmStartedAt = null;
+    lastDisplayStatus = "green";
+    return { status: lastDisplayStatus, levelChanged };
+  }
+
+  const now = Date.now();
+  const stressStatus = evaluation.enterStatus;
+  const calmEnough = evaluation.exitStatus === "green";
+
+  if (stressStatus !== "green") {
     calmStartedAt = null;
     if (stressStartedAt === null) {
       stressStartedAt = now;
@@ -95,19 +93,19 @@ export function tickAutoProtection(
 
     const heldMs = now - stressStartedAt;
     if (heldMs >= ESCALATE_HOLD_MS) {
-      const targetLevel = targetLevelForStatus(rawStatus);
+      const targetLevel = targetLevelForStatus(stressStatus);
       if (targetLevel > tuning.level) {
         const fromLevel = tuning.level;
         setThrottleLevel(targetLevel);
         appendTuningAudit({
           action: describeTuningChange(fromLevel, targetLevel),
-          reason: `Load held ${Math.round(heldMs / 1000)}s — CPU ${host.cpuPercent}%, p95 ${http.overallP95Ms}ms, ${http.totalReqPerSec} req/s`,
+          reason: formatReason(host, http, evaluation, Math.round(heldMs / 1000)),
           expectedEffect: "Lower device refresh rate — system breathing room",
         });
         levelChanged = true;
       }
     }
-  } else {
+  } else if (calmEnough) {
     stressStartedAt = null;
     if (calmStartedAt === null) {
       calmStartedAt = now;
@@ -119,21 +117,29 @@ export function tickAutoProtection(
       setThrottleLevel(0);
       appendTuningAudit({
         action: describeTuningChange(fromLevel, 0),
-        reason: `Stable green for ${Math.round(heldMs / 1000)}s — CPU ${host.cpuPercent}%, p95 ${http.overallP95Ms}ms`,
+        reason: `Stable calm for ${Math.round(heldMs / 1000)}s — CPU ${host.cpuPercent}%, ${http.totalReqPerSec} req/s`,
         expectedEffect: "Full return to normal device refresh speed",
       });
       levelChanged = true;
       calmStartedAt = null;
     }
+  } else {
+    stressStartedAt = null;
+    calmStartedAt = null;
   }
 
-  // Status reflects load metrics only — never inflate because Auto Protection level > 0.
-  lastStatus = rawStatus;
+  const currentLevel = getRuntimeTuningState().level;
+  lastDisplayStatus = getDisplayStatus(stressStatus, currentLevel);
 
-  return { status: lastStatus, levelChanged };
+  return { status: lastDisplayStatus, levelChanged };
 }
 
 let tickTimer: ReturnType<typeof setInterval> | null = null;
+let tickContext: ProtectionContext = { uptimeMs: 0, connectedDevices: 0 };
+
+export function setAutoProtectionContext(context: ProtectionContext): void {
+  tickContext = context;
+}
 
 export function startAutoProtectionEngine(): void {
   if (tickTimer) return;
@@ -142,33 +148,49 @@ export function startAutoProtectionEngine(): void {
     seedBaselineAudit();
   }
   tickTimer = setInterval(() => {
-    tickAutoProtection(getHostMetricsSnapshot(), getHttpMetricsSnapshot());
+    tickAutoProtection(getHostMetricsSnapshot(), getHttpMetricsSnapshot(), {
+      uptimeMs: Math.round(process.uptime() * 1000),
+      connectedDevices: tickContext.connectedDevices,
+    });
   }, TICK_MS);
   tickTimer.unref();
 }
 
 export function getNavStatusLabel(
   status: SystemHealthStatus,
-  _autoProtectionActive: boolean,
   level: ThrottleLevel,
+  evaluation?: ReturnType<typeof evaluateSystemHealth> | null,
 ): {
   primary: string;
   secondary?: string;
   tone: "green" | "yellow" | "orange" | "red";
 } {
+  if (evaluation?.inGracePeriod) {
+    const mins = Math.ceil((evaluation.graceRemainingMs ?? 0) / 60_000);
+    return {
+      primary: "System normal",
+      secondary: mins > 0 ? `Startup calibration — ${mins}m remaining` : "Startup calibration",
+      tone: "green",
+    };
+  }
+
   switch (status) {
     case "green":
       return {
         primary: "System normal",
-        secondary: level > 0 ? `Auto Protection recovering (level ${level})` : undefined,
+        secondary: level > 0 ? `Refreshing speeds recovering (level ${level})` : undefined,
         tone: "green",
       };
     case "yellow":
-      return { primary: "Load rising", secondary: "Watching traffic", tone: "yellow" };
+      return {
+        primary: "Elevated load",
+        secondary: level > 0 ? `Auto Protection level ${level}` : "Monitoring — tournament can continue",
+        tone: "yellow",
+      };
     case "orange":
       return {
         primary: "High load",
-        secondary: level > 0 ? `Auto Protection level ${level} active` : "Reduce new devices",
+        secondary: level > 0 ? `Auto Protection level ${level} active` : "Consider pausing new devices",
         tone: "orange",
       };
     case "red":

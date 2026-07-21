@@ -3,12 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { useTournament } from "../useTournament";
-import { Plus, Edit3, Trash2, Search, Filter, Download, Upload, UserPlus, FileDown, Eye, Check, X } from "lucide-react";
+import { Edit3, Trash2, Search, Download, Upload, UserPlus, Eye, X } from "lucide-react";
 import { Player, PlayerStatus } from "../types";
-import { IdScanPanel } from "./IdScanPanel";
+import { IdScanPanel, type CameraOption } from "./IdScanPanel";
+import { CountryLabel, CountryFlag, countryInputDisplayValue } from "./CountryLabel";
+import PlayerListShowModal from "./PlayerListShowModal";
+import { normalizeCountryValue } from "../utils/countryFlags";
+import { formatPlayerStatusDisplay, formatPlayerNameDisplay } from "../utils/playerRegistryReport";
 import type { IdScanFields } from "../idScan/types";
+
+const ID_SCAN_CAMERA_STORAGE_KEY = "tm-id-scan-camera-device-id";
 
 export default function PlayersView() {
   const {
@@ -22,13 +28,14 @@ export default function PlayersView() {
     disqualifyPlayer
   } = useTournament();
 
-  const { players } = state;
+  const { players, history, settings } = state;
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"All" | PlayerStatus>("All");
   
   // Registration Form state
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showPlayerListModal, setShowPlayerListModal] = useState(false);
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
   
   const [formState, setFormState] = useState({
@@ -40,6 +47,53 @@ export default function PlayersView() {
     phone: "",
     notes: ""
   });
+  const registerModalRef = useRef<HTMLDivElement>(null);
+  const [cameras, setCameras] = useState<CameraOption[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState(() => {
+    try {
+      return localStorage.getItem(ID_SCAN_CAMERA_STORAGE_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
+
+  const handleCamerasDiscovered = useCallback((list: CameraOption[]) => {
+    setCameras(list);
+    if (list.length === 0) return;
+
+    setSelectedCameraId((current) => {
+      const saved = (() => {
+        try {
+          return localStorage.getItem(ID_SCAN_CAMERA_STORAGE_KEY);
+        } catch {
+          return null;
+        }
+      })();
+
+      if (saved && list.some((camera) => camera.deviceId === saved)) {
+        return saved;
+      }
+      if (current && list.some((camera) => camera.deviceId === current)) {
+        return current;
+      }
+      return list[0].deviceId;
+    });
+  }, []);
+
+  const handleCameraSelect = useCallback((deviceId: string) => {
+    setSelectedCameraId(deviceId);
+    try {
+      localStorage.setItem(ID_SCAN_CAMERA_STORAGE_KEY, deviceId);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  useEffect(() => {
+    if (showAddModal) {
+      registerModalRef.current?.scrollTo({ top: 0 });
+    }
+  }, [showAddModal]);
 
   const handleIdScanResult = useCallback((fields: IdScanFields) => {
     setFormState((prev) => ({
@@ -47,7 +101,7 @@ export default function PlayersView() {
       firstName: fields.firstName,
       lastName: fields.lastName,
       birthDate: fields.birthDate ?? "",
-      country: fields.country ?? prev.country,
+      country: fields.country ? normalizeCountryValue(fields.country) : prev.country,
     }));
   }, []);
 
@@ -116,7 +170,7 @@ export default function PlayersView() {
       firstName: player.firstName,
       lastName: player.lastName,
       nickname: player.nickname,
-      country: player.country,
+      country: normalizeCountryValue(player.country),
       birthDate: player.birthDate ?? "",
       phone: player.phone,
       notes: player.notes
@@ -134,6 +188,7 @@ export default function PlayersView() {
     const payload = {
       ...formState,
       birthDate: formState.birthDate.trim() || null,
+      country: normalizeCountryValue(formState.country),
     };
 
     if (editingPlayerId) {
@@ -205,6 +260,12 @@ export default function PlayersView() {
           </div>
           
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowPlayerListModal(true)}
+              className="px-4 py-2 bg-zinc-900 border border-amber-500/30 hover:border-amber-500/60 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-1.5 text-amber-400"
+            >
+              <Eye className="w-3.5 h-3.5" /> Player List Show
+            </button>
             <button 
               onClick={triggerImportJSON}
               className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-650 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-1.5 text-zinc-100"
@@ -299,14 +360,15 @@ export default function PlayersView() {
                   return (
                     <tr key={player.id} className="hover:bg-zinc-900/40 transition group">
                       <td className="py-3 px-5">
-                        <p className="font-bold text-zinc-100 text-sm">{player.firstName} {player.lastName}</p>
-                        <p className="text-[10px] text-zinc-500 font-mono mt-0.5">{player.phone || "No phone"}</p>
+                        <p className="font-bold text-zinc-100 text-sm uppercase">
+                          {formatPlayerNameDisplay(`${player.firstName} ${player.lastName}`)}
+                        </p>
                       </td>
                       <td className="py-3 px-4 font-mono font-bold text-yellow-500 text-xs">
                         {player.nickname ? `"${player.nickname}"` : "-"}
                       </td>
                       <td className="py-3 px-4 text-xs font-semibold text-zinc-300">
-                        {player.country}
+                        <CountryLabel country={player.country} />
                       </td>
                       <td className="py-3 px-4 font-mono font-bold text-sm">
                         {player.chips > 0 ? player.chips.toLocaleString() : "-"}
@@ -319,7 +381,7 @@ export default function PlayersView() {
                       </td>
                       <td className="py-3 px-4">
                         <span className={`px-2.5 py-1 border rounded-full text-[10px] font-black uppercase tracking-wider ${statusColors[player.status] || "bg-zinc-950"}`}>
-                          {player.status}
+                          {formatPlayerStatusDisplay(player.status)}
                         </span>
                       </td>
                       <td className="py-3 px-4 text-xs">
@@ -394,17 +456,17 @@ export default function PlayersView() {
 
       {/* Registration & Edit Form Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
-          <form 
+        <div ref={registerModalRef} className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto">
+          <form
             onSubmit={handleFormSubmit}
-            className="bg-zinc-900 rounded-2xl border border-zinc-800 p-6 max-w-3xl w-full space-y-4 my-4"
+            className="bg-zinc-900 rounded-2xl border border-zinc-800 max-w-6xl w-full flex flex-col max-h-[calc(100vh-2rem)] my-2 overflow-hidden shadow-2xl"
           >
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+            <div className="shrink-0 flex items-center justify-between border-b border-zinc-800 px-6 py-4 bg-zinc-900">
               <h3 className="text-md font-black uppercase text-zinc-100 tracking-wider flex items-center gap-1.5">
                 <UserPlus className="w-5 h-5 text-amber-500" />
                 {editingPlayerId ? "EDIT PLAYER INFORMATION" : "REGISTER NEW TOURNAMENT PLAYER"}
               </h3>
-              <button 
+              <button
                 type="button"
                 onClick={() => setShowAddModal(false)}
                 className="text-zinc-400 hover:text-zinc-100"
@@ -413,94 +475,145 @@ export default function PlayersView() {
               </button>
             </div>
 
-            {!editingPlayerId && (
-              <IdScanPanel active={showAddModal && !editingPlayerId} onResult={handleIdScanResult} />
-            )}
+            <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4">
+              <div
+                className={`grid gap-6 ${editingPlayerId ? "grid-cols-1 max-w-2xl mx-auto" : "grid-cols-1 lg:grid-cols-2"}`}
+              >
+                {!editingPlayerId && (
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+                      <p className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider shrink-0">
+                        ID scan — camera & capture
+                      </p>
+                      <select
+                        value={selectedCameraId}
+                        onChange={(e) => handleCameraSelect(e.target.value)}
+                        disabled={cameras.length === 0}
+                        className="min-w-[160px] max-w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1 text-[11px] text-zinc-100 focus:outline-none focus:border-amber-500 disabled:opacity-50"
+                        aria-label="Select camera"
+                      >
+                        {cameras.length === 0 ? (
+                          <option value="">No camera detected</option>
+                        ) : (
+                          cameras.map((camera) => (
+                            <option key={camera.deviceId} value={camera.deviceId}>
+                              {camera.label}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                    <IdScanPanel
+                      active={showAddModal && !editingPlayerId}
+                      onResult={handleIdScanResult}
+                      cameraDeviceId={selectedCameraId || null}
+                      onCamerasDiscovered={handleCamerasDiscovered}
+                    />
+                  </div>
+                )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">First Name</label>
-                <input 
-                  type="text" 
-                  value={formState.firstName} 
-                  onChange={(e) => handleInputChange("firstName", e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">Last Name</label>
-                <input 
-                  type="text" 
-                  value={formState.lastName} 
-                  onChange={(e) => handleInputChange("lastName", e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500"
-                  required
-                />
+                <div className="min-w-0 space-y-4">
+                  {!editingPlayerId && (
+                    <p className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">
+                      Tournament player registration
+                    </p>
+                  )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">First Name</label>
+                      <input
+                        type="text"
+                        value={formState.firstName}
+                        onChange={(e) => handleInputChange("firstName", e.target.value)}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">Last Name</label>
+                      <input
+                        type="text"
+                        value={formState.lastName}
+                        onChange={(e) => handleInputChange("lastName", e.target.value)}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">Nickname</label>
+                      <input
+                        type="text"
+                        value={formState.nickname}
+                        onChange={(e) => handleInputChange("nickname", e.target.value)}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">Country</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                          <CountryFlag country={formState.country} />
+                        </span>
+                        <input
+                          type="text"
+                          value={countryInputDisplayValue(formState.country)}
+                          onChange={(e) => handleInputChange("country", e.target.value)}
+                          onBlur={() =>
+                            handleInputChange("country", normalizeCountryValue(formState.country))
+                          }
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl pl-10 pr-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">Birth Date</label>
+                      <input
+                        type="date"
+                        value={formState.birthDate}
+                        onChange={(e) => handleInputChange("birthDate", e.target.value)}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">Phone Number</label>
+                      <input
+                        type="text"
+                        value={formState.phone}
+                        onChange={(e) => handleInputChange("phone", e.target.value)}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">Notes</label>
+                    <textarea
+                      rows={3}
+                      value={formState.notes}
+                      onChange={(e) => handleInputChange("notes", e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500 resize-none"
+                    />
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">Nickname</label>
-                <input 
-                  type="text" 
-                  value={formState.nickname} 
-                  onChange={(e) => handleInputChange("nickname", e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500"
-                />
-              </div>
-              <div>
-                <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">Country</label>
-                <input 
-                  type="text" 
-                  value={formState.country} 
-                  onChange={(e) => handleInputChange("country", e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">Birth Date</label>
-                <input 
-                  type="date" 
-                  value={formState.birthDate} 
-                  onChange={(e) => handleInputChange("birthDate", e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500"
-                />
-              </div>
-              <div>
-                <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">Phone Number</label>
-                <input 
-                  type="text" 
-                  value={formState.phone} 
-                  onChange={(e) => handleInputChange("phone", e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500 font-mono"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-[9px] text-zinc-400 font-bold uppercase tracking-wider mb-1">Notes</label>
-              <textarea 
-                rows={3}
-                value={formState.notes} 
-                onChange={(e) => handleInputChange("notes", e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-amber-500 resize-none"
-              />
-            </div>
-
-            <div className="flex items-center justify-end gap-2 border-t border-zinc-800 pt-3">
-              <button 
-                type="button" 
+            <div className="shrink-0 flex items-center justify-end gap-2 border-t border-zinc-800 px-6 py-4 bg-zinc-900">
+              <button
+                type="button"
                 onClick={() => setShowAddModal(false)}
                 className="px-4 py-2 border border-zinc-800 bg-zinc-950 rounded-xl text-xs font-bold uppercase text-zinc-400 hover:text-zinc-100"
               >
                 Cancel
               </button>
-              <button 
+              <button
                 type="submit"
                 className="px-5 py-2.5 bg-emerald-500 text-black font-black uppercase text-xs rounded-xl tracking-wider shadow-lg shadow-emerald-500/10"
               >
@@ -509,6 +622,15 @@ export default function PlayersView() {
             </div>
           </form>
         </div>
+      )}
+
+      {showPlayerListModal && (
+        <PlayerListShowModal
+          players={players}
+          history={history}
+          tournamentName={settings.name}
+          onClose={() => setShowPlayerListModal(false)}
+        />
       )}
 
     </div>

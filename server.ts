@@ -41,6 +41,7 @@ import {
 } from "./src/server/websocket/wsRpcDispatcher";
 import { buildAdminDashboardSnapshot } from "./src/server/adminDashboard";
 import { createSystemHealthMiddleware } from "./src/server/systemHealth/systemHealthMiddleware";
+import { createVenueDeviceModeMiddleware } from "./src/server/systemHealth/venueDeviceModeMiddleware";
 import { registerSystemHealthRoutes } from "./src/server/systemHealth/systemHealthRoutes";
 import { startHostMetricsSampler } from "./src/server/systemHealth/hostMetrics";
 import { startAutoProtectionEngine } from "./src/server/systemHealth/throttleEngine";
@@ -223,6 +224,7 @@ async function bootstrap() {
   app.use(express.json({ limit: "6mb" }));
   applyLocalServerCors(app);
   app.use(createSystemHealthMiddleware());
+  app.use(createVenueDeviceModeMiddleware());
 
   startHostMetricsSampler();
   startAutoProtectionEngine();

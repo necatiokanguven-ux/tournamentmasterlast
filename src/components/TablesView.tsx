@@ -15,6 +15,7 @@ import TableQrModal from "./TableQrModal";
 import FloorSetupModal from "./FloorSetupModal";
 import DealerTimerSettingsModal from "./DealerTimerSettingsModal";
 import TableUndoModal from "./TableUndoModal";
+import { CountryLabel } from "./CountryLabel";
 
 export default function TablesView() {
   const {
@@ -528,8 +529,9 @@ export default function TablesView() {
                   <p className="text-[11px] font-bold text-zinc-200 uppercase truncate leading-tight">
                     {p.firstName} {p.lastName}
                   </p>
-                  <p className="text-[9px] text-zinc-500 mt-0.5 font-mono">
-                    {p.country || "TR"} • {p.chips.toLocaleString()}
+                  <p className="text-[9px] text-zinc-500 mt-0.5 font-mono inline-flex items-center gap-1.5 flex-wrap">
+                    <CountryLabel country={p.country || "Turkey"} flagClassName="text-sm leading-none [font-family:'Segoe_UI_Emoji','Apple_Color_Emoji','Noto_Color_Emoji',sans-serif]" className="text-[9px] gap-1" />
+                    <span>• {p.chips.toLocaleString()}</span>
                   </p>
                 </div>
                 <button

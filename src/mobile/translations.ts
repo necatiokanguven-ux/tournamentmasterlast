@@ -1,5 +1,7 @@
 export type MobileTranslations = {
   dealerTablet: string;
+  dealerPhone: string;
+  tableTablet: string;
   floorMobile: string;
   table: string;
   seat: string;
@@ -53,6 +55,8 @@ export type MobileTranslations = {
 
 const mobileTranslations: MobileTranslations = {
   dealerTablet: "Dealer Tablet",
+  dealerPhone: "Dealer Phone",
+  tableTablet: "Table Tablet",
   floorMobile: "Floor Mobile",
   table: "Table",
   seat: "Seat",

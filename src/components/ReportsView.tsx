@@ -7,6 +7,8 @@ import React, { useState } from "react";
 import { useTournament } from "../useTournament";
 import { FileText, Printer, FileSpreadsheet, ListOrdered, CircleDollarSign, HelpCircle, Activity, ScrollText, Download } from "lucide-react";
 import { localApi } from "../config/api";
+import { CountryLabel } from "./CountryLabel";
+import { normalizeCountryValue } from "../utils/countryFlags";
 
 export default function ReportsView() {
   const { state } = useTournament();
@@ -83,12 +85,12 @@ export default function ReportsView() {
     } else if (activeReport === "chips") {
       csvContent += "Rank,Player Name,Nickname,Country,Chip Count\n";
       chipLeaders.forEach((p, idx) => {
-        csvContent += `${idx + 1},"${p.firstName} ${p.lastName}","${p.nickname}","${p.country}",${p.chips}\n`;
+        csvContent += `${idx + 1},"${p.firstName} ${p.lastName}","${p.nickname}","${normalizeCountryValue(p.country)}",${p.chips}\n`;
       });
     } else if (activeReport === "players") {
       csvContent += "Player Name,Nickname,Country,Phone,Status,Rebuys,Reentries,Addons\n";
       players.forEach((p) => {
-        csvContent += `"${p.firstName} ${p.lastName}","${p.nickname}","${p.country}","${p.phone}","${p.status}",${p.rebuys},${p.reentries},${p.addons}\n`;
+        csvContent += `"${p.firstName} ${p.lastName}","${p.nickname}","${normalizeCountryValue(p.country)}","${p.phone}","${p.status}",${p.rebuys},${p.reentries},${p.addons}\n`;
       });
     } else if (activeReport === "payouts") {
       csvContent += "Rank,Percentage,Amount ($)\n";
@@ -107,7 +109,7 @@ export default function ReportsView() {
     } else {
       csvContent += "Elimination Rank,Player Name,Nickname,Country\n";
       eliminationOrder.forEach((p, idx) => {
-        csvContent += `${idx + 1},"${p.firstName} ${p.lastName}","${p.nickname}","${p.country}"\n`;
+        csvContent += `${idx + 1},"${p.firstName} ${p.lastName}","${p.nickname}","${normalizeCountryValue(p.country)}"\n`;
       });
     }
 
@@ -219,7 +221,7 @@ export default function ReportsView() {
                         <td className="py-2.5 font-mono font-bold text-amber-500">{idx + 1}</td>
                         <td className="py-2.5 font-bold">{p.firstName} {p.lastName}</td>
                         <td className="py-2.5 font-mono text-zinc-400">"{p.nickname}"</td>
-                        <td className="py-2.5 text-zinc-350">{p.country}</td>
+                        <td className="py-2.5 text-zinc-350"><CountryLabel country={p.country} /></td>
                         <td className="py-2.5 text-right font-mono font-black text-[#00e676] print:text-black">
                           {p.chips.toLocaleString()}
                         </td>
@@ -381,7 +383,7 @@ export default function ReportsView() {
                         <td className="py-2.5 font-mono font-bold text-red-500">#{index + 1}</td>
                         <td className="py-2.5 font-bold">{p.firstName} {p.lastName}</td>
                         <td className="py-2.5 font-mono text-zinc-400">"{p.nickname}"</td>
-                        <td className="py-2.5 text-zinc-350">{p.country}</td>
+                        <td className="py-2.5 text-zinc-350"><CountryLabel country={p.country} /></td>
                         <td className="py-2.5 text-right font-mono">{p.reentries}</td>
                       </tr>
                     ))}

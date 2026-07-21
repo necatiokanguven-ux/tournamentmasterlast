@@ -4,6 +4,7 @@ import type { DealerTimerModeSetting } from "../types";
 import { useRuntimeTuningPollMs } from "../systemHealth/useRuntimeTuning";
 import { mergeTrackingLiveState, type TrackingLiveState } from "../tracking/liveState";
 import type { DealerTimerSnapshot } from "./dealerTimerTypes";
+import { mergeDealerTimerSnapshot } from "./dealerTimerTypes";
 
 export type DealerSeatSnapshot = {
   seatNumber: number;
@@ -53,6 +54,7 @@ export type DealerTableSnapshot = {
   };
   dealerTimer: DealerTimerSnapshot;
   connectedDevices: number;
+  connectedDeviceTypes: Array<"tablet" | "phone">;
   clock: DealerClockSnapshot;
 };
 
@@ -77,6 +79,7 @@ type DealerTablePayload = {
   };
   dealerTimer?: DealerTimerSnapshot;
   connectedDevices?: number;
+  connectedDeviceTypes?: Array<"tablet" | "phone">;
 };
 
 const DEFAULT_TABLET_POLL_MS = 500;
@@ -102,6 +105,7 @@ export function useDealerTablePoll(
   tableNumber: number | null,
   enabled: boolean,
   deviceId: string | null,
+  deviceType: "tablet" | "phone" = "tablet",
 ) {
   const tabletPollMs = useRuntimeTuningPollMs("dealerTabletPollMs", DEFAULT_TABLET_POLL_MS);
   const [liveState, setLiveState] = useState<TrackingLiveState | null>(null);
@@ -109,6 +113,7 @@ export function useDealerTablePoll(
   const [error, setError] = useState<string | null>(null);
   const [liveLoaded, setLiveLoaded] = useState(false);
   const [connectedDevices, setConnectedDevices] = useState(0);
+  const [connectedDeviceTypes, setConnectedDeviceTypes] = useState<Array<"tablet" | "phone">>([]);
   const [dealerTimer, setDealerTimer] = useState<DealerTimerSnapshot | null>(null);
 
   const fetchLiveState = useCallback(async () => {
@@ -138,7 +143,12 @@ export function useDealerTablePoll(
     if (!tableNumber) return;
 
     try {
-      const query = deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : "";
+      const queryParams = new URLSearchParams();
+      if (deviceId) {
+        queryParams.set("deviceId", deviceId);
+      }
+      queryParams.set("deviceType", deviceType);
+      const query = `?${queryParams.toString()}`;
       const response = await fetch(localApi(`/api/dealer/table/${tableNumber}${query}`));
       if (!response.ok) {
         throw new Error(response.status === 404 ? "Table not found." : "Failed to load table data.");
@@ -148,50 +158,68 @@ export function useDealerTablePoll(
         clock?: unknown;
         dealerTimer?: DealerTimerSnapshot;
         connectedDevices?: number;
+        connectedDeviceTypes?: Array<"tablet" | "phone">;
       };
-      setTableData({
-        version: data.version,
-        tableNumber: data.tableNumber,
-        tableId: data.tableId,
-        tournamentName: data.tournamentName,
-        dealerId: data.dealerId ?? null,
-        dealerName: data.dealerName ?? null,
-        dealerState: data.dealerState ?? null,
-        dealerDealSeconds: data.dealerDealSeconds ?? 0,
-        dealerRotationRemainingSeconds: data.dealerRotationRemainingSeconds ?? null,
-        dealerDealStartedAt: data.dealerDealStartedAt ?? null,
-        dealerDealEndAt: data.dealerDealEndAt ?? null,
-        rotationTDealMinutes: data.rotationTDealMinutes ?? 30,
-        seats: data.seats ?? [],
-        timerSettings: data.timerSettings ?? {
-          mode: "call_time",
-          callTimeSeconds: 30,
-          playerTimeSeconds: 60,
-        },
-        dealerTimer: data.dealerTimer,
-        connectedDevices: data.connectedDevices,
+      setTableData((current) => {
+        const mergedTimer = data.dealerTimer
+          ? mergeDealerTimerSnapshot(current?.dealerTimer ?? null, data.dealerTimer)
+          : current?.dealerTimer;
+
+        return {
+          version: data.version,
+          tableNumber: data.tableNumber,
+          tableId: data.tableId,
+          tournamentName: data.tournamentName,
+          dealerId: data.dealerId ?? null,
+          dealerName: data.dealerName ?? null,
+          dealerState: data.dealerState ?? null,
+          dealerDealSeconds: data.dealerDealSeconds ?? 0,
+          dealerRotationRemainingSeconds: data.dealerRotationRemainingSeconds ?? null,
+          dealerDealStartedAt: data.dealerDealStartedAt ?? null,
+          dealerDealEndAt: data.dealerDealEndAt ?? null,
+          rotationTDealMinutes: data.rotationTDealMinutes ?? 30,
+          seats: data.seats ?? [],
+          timerSettings: data.timerSettings ?? {
+            mode: "call_time",
+            callTimeSeconds: 30,
+            playerTimeSeconds: 60,
+          },
+          dealerTimer: mergedTimer,
+          connectedDevices: data.connectedDevices,
+          connectedDeviceTypes: data.connectedDeviceTypes,
+        };
       });
       if (data.dealerTimer) {
-        setDealerTimer((current) =>
-          current && current.revision === data.dealerTimer!.revision ? current : data.dealerTimer!,
-        );
+        setDealerTimer((current) => mergeDealerTimerSnapshot(current, data.dealerTimer!));
       }
       if (typeof data.connectedDevices === "number") {
         setConnectedDevices(data.connectedDevices);
+      }
+      if (Array.isArray(data.connectedDeviceTypes)) {
+        setConnectedDeviceTypes(data.connectedDeviceTypes);
+      } else if (typeof data.connectedDevices === "number" && data.connectedDevices > 0) {
+        setConnectedDeviceTypes([deviceType]);
       }
       setError(null);
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : "Failed to load table data.");
     }
-  }, [tableNumber, deviceId]);
+  }, [deviceId, deviceType, tableNumber]);
 
   const refresh = useCallback(async () => {
     await Promise.all([fetchLiveState(), fetchTableData()]);
   }, [fetchLiveState, fetchTableData]);
 
   const applyDealerTimerSnapshot = useCallback((timer: DealerTimerSnapshot) => {
-    setDealerTimer(timer);
-    setTableData((current) => (current ? { ...current, dealerTimer: timer } : current));
+    setDealerTimer((current) => mergeDealerTimerSnapshot(current, timer));
+    setTableData((current) =>
+      current
+        ? {
+            ...current,
+            dealerTimer: mergeDealerTimerSnapshot(current.dealerTimer ?? null, timer),
+          }
+        : current,
+    );
   }, []);
 
   useEffect(() => {
@@ -200,6 +228,7 @@ export function useDealerTablePoll(
       setTableData(null);
       setDealerTimer(null);
       setConnectedDevices(0);
+      setConnectedDeviceTypes([]);
       setError(null);
       setLiveLoaded(false);
       return;
@@ -266,11 +295,24 @@ export function useDealerTablePoll(
         secondsRemaining: 0,
       },
       connectedDevices: connectedDevices || tableData?.connectedDevices || 0,
+      connectedDeviceTypes: [...new Set([
+        ...connectedDeviceTypes,
+        ...(tableData?.connectedDeviceTypes ?? []),
+      ])],
       clock: mapLiveToDealerClock(liveState),
     };
-  }, [connectedDevices, dealerTimer, liveState, tableData, tableNumber]);
+  }, [connectedDeviceTypes, connectedDevices, dealerTimer, liveState, tableData, tableNumber]);
 
   const isLoading = !liveLoaded;
 
-  return { snapshot, dealerTimer, connectedDevices, error, isLoading, refresh, applyDealerTimerSnapshot };
+  return {
+    snapshot,
+    dealerTimer,
+    connectedDevices,
+    connectedDeviceTypes,
+    error,
+    isLoading,
+    refresh,
+    applyDealerTimerSnapshot,
+  };
 }

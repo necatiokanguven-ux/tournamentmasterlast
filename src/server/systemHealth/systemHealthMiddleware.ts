@@ -20,11 +20,20 @@ export function createSystemHealthMiddleware() {
     const channel = classifyRequestPath(req.path, req.get("user-agent"));
 
     if (channel === "tracking") {
-      const clientKey = clientKeyFromRequest(
-        req.ip || req.socket.remoteAddress,
-        req.get("user-agent"),
-      );
-      recordQrDevice(clientKey);
+      const isPlayerTrackingClient =
+        req.path.startsWith("/track")
+        || req.path === "/api/tracking/players"
+        || req.path === "/api/tracking/ping"
+        || req.path === "/api/tracking/payouts"
+        || req.path === "/api/tracking/status";
+
+      if (isPlayerTrackingClient) {
+        const clientKey = clientKeyFromRequest(
+          req.ip || req.socket.remoteAddress,
+          req.get("user-agent"),
+        );
+        recordQrDevice(clientKey);
+      }
     }
 
     res.on("finish", () => {

@@ -22,6 +22,10 @@ export function storeSessionToken(dealerId: string, token: string): void {
   localStorage.setItem(`${SESSION_PREFIX}${dealerId}`, token);
 }
 
+export function clearStoredSessionToken(dealerId: string): void {
+  localStorage.removeItem(`${SESSION_PREFIX}${dealerId}`);
+}
+
 export async function ensureDealerPhoneSession(dealerId: string): Promise<void> {
   const deviceId = getOrCreateDeviceId();
   const stored = getStoredSessionToken(dealerId);

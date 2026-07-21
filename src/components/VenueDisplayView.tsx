@@ -12,12 +12,12 @@ import { isWsEnabled } from "../config/featureFlags";
 import { useTournamentSocket } from "../websocket/useTournamentSocket";
 import { isClockChannelPayload } from "../websocket/clockChannelTypes";
 import { useVenueDisplayKiosk } from "../venue/useVenueDisplayKiosk";
-import VenueFullscreenHint from "./VenueFullscreenHint";
+import KioskFullscreenControl from "./KioskFullscreenControl";
 
 export default function VenueDisplayView() {
   const { isLicensed, loading: licenseLoading, status: licenseStatus } = useLicenseStatus();
   const [dataReady, setDataReady] = useState(false);
-  const { showFullscreenHint, dismissHint } = useVenueDisplayKiosk();
+  useVenueDisplayKiosk();
 
   useTournamentSocket({
     enabled: isWsEnabled(),
@@ -74,7 +74,7 @@ export default function VenueDisplayView() {
       <div className="venue-display-root h-screen w-screen flex flex-col items-center justify-center bg-zinc-950 text-zinc-400 gap-3">
         <Loader2 className="w-8 h-8 animate-spin text-cyan-400" />
         <p className="text-xs font-bold uppercase tracking-wider">Loading venue display…</p>
-        <VenueFullscreenHint visible={showFullscreenHint} onActivate={dismissHint} />
+        <KioskFullscreenControl enabled variant="tv" />
       </div>
     );
   }
@@ -88,7 +88,7 @@ export default function VenueDisplayView() {
           Activate a valid license on the director PC running Tournament Master.
           {licenseStatus?.message ? ` ${licenseStatus.message}` : ""}
         </p>
-        <VenueFullscreenHint visible={showFullscreenHint} onActivate={dismissHint} />
+        <KioskFullscreenControl enabled variant="tv" />
       </div>
     );
   }
@@ -96,7 +96,7 @@ export default function VenueDisplayView() {
   return (
     <div className="venue-display-root h-screen w-screen overflow-hidden bg-zinc-950">
       <ClockView venueDisplay />
-      <VenueFullscreenHint visible={showFullscreenHint} onActivate={dismissHint} />
+      <KioskFullscreenControl enabled variant="tv" />
     </div>
   );
 }

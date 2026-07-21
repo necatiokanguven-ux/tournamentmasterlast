@@ -13,6 +13,7 @@ import {
 import type { CoverageActionResult } from "./types";
 import {
   beginPhoneGrace,
+  endPhoneSession,
   isDealerInPhoneGrace,
   rehydratePhoneSession,
   startPhoneSession,
@@ -491,10 +492,19 @@ export function createDealerControlRouter(
       return;
     }
 
+    let acceptError: string | null = null;
     let ok = false;
     db.dealerRotation = withManager(db, manager => {
+      acceptError = manager.getAcceptTableAssignmentError(dealerId, tableId);
+      if (acceptError) {
+        return;
+      }
       ok = manager.acceptTableAssignment(dealerId, tableId);
     });
+    if (acceptError) {
+      res.status(409).json({ error: acceptError });
+      return;
+    }
     if (!ok) {
       res.status(400).json({ error: "ACCEPT_FAILED" });
       return;
@@ -611,6 +621,32 @@ export function createDealerControlRouter(
 
     const snapshot = buildDealerPhoneChannelPayload(getDb(), dealerId);
     res.json({ success: true, sessionToken, snapshot });
+  });
+
+  router.post("/phone/session/end", (req, res) => {
+    const dealerId = String(req.body?.dealerId ?? "").trim();
+    const deviceId = String(req.body?.deviceId ?? "").trim();
+    if (!dealerId) {
+      res.status(400).json({ error: "INVALID_REQUEST" });
+      return;
+    }
+
+    const db = getDb();
+    const dealer = db.dealerRotation.staff.find(entry => entry.id === dealerId);
+    if (!dealer) {
+      res.status(404).json({ error: "DEALER_NOT_FOUND" });
+      return;
+    }
+
+    if (deviceId && dealer.phoneDeviceId && dealer.phoneDeviceId !== deviceId) {
+      res.status(403).json({ error: "DEVICE_MISMATCH" });
+      return;
+    }
+
+    endPhoneSession(dealer);
+    persistDb(db);
+    hooks?.onDealerPhoneUpdated?.(dealerId);
+    res.json({ success: true });
   });
 
   router.post("/phone/rehydrate", (req, res) => {

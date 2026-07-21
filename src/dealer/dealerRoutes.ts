@@ -14,6 +14,7 @@ import {
 import { dealerDisplayName } from "../server/dealerRotation/types";
 import {
   applyDealerTimerAction,
+  getConnectedDealerDeviceTypes,
   getDealerTimerSnapshot,
   heartbeatDealerDevice,
   registerDealerDevice,
@@ -172,7 +173,9 @@ export function createDealerRouter(port: number, getDb: DbAccessor, saveDb: DbSa
       connectedDevices: heartbeatDealerDevice(
         tableNumber,
         typeof req.query.deviceId === "string" ? req.query.deviceId : null,
+        typeof req.query.deviceType === "string" && req.query.deviceType === "phone" ? "phone" : "tablet",
       ).connectedDevices,
+      connectedDeviceTypes: getConnectedDealerDeviceTypes(tableNumber),
       clock: {
         timeRemaining: live.timeRemaining,
         isRunning: live.isRunning,
@@ -241,7 +244,8 @@ export function createDealerRouter(port: number, getDb: DbAccessor, saveDb: DbSa
     }
 
     const deviceId = String(req.body?.deviceId ?? "").trim();
-    const result = registerDealerDevice(tableNumber, deviceId);
+    const deviceType = String(req.body?.deviceType ?? "tablet").trim();
+    const result = registerDealerDevice(tableNumber, deviceId, deviceType === "phone" ? "phone" : "tablet");
 
     if (result.ok === false) {
       const status = result.error === "DEVICE_LIMIT" ? 409 : 400;
@@ -252,6 +256,7 @@ export function createDealerRouter(port: number, getDb: DbAccessor, saveDb: DbSa
     res.json({
       success: true,
       connectedDevices: result.connectedDevices,
+      connectedDeviceTypes: getConnectedDealerDeviceTypes(tableNumber),
       dealerTimer: getDealerTimerSnapshot(tableNumber),
     });
   });

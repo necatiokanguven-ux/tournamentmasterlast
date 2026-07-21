@@ -1,4 +1,8 @@
+import { clearStoredSessionToken, getOrCreateDeviceId } from "./dealerSession";
+import { localApi } from "../config/api";
+
 const IDENTITY_KEY = "tm-dealer-identity";
+const IDENTITY_CHANGED_EVENT = "dealer-identity-changed";
 
 export type StoredDealerIdentity = {
   dealerId: string;
@@ -26,10 +30,46 @@ export function readDealerIdentity(): StoredDealerIdentity | null {
   }
 }
 
+function notifyIdentityChanged(): void {
+  window.dispatchEvent(new Event(IDENTITY_CHANGED_EVENT));
+}
+
 export function writeDealerIdentity(identity: StoredDealerIdentity): void {
   localStorage.setItem(IDENTITY_KEY, JSON.stringify(identity));
+  notifyIdentityChanged();
 }
 
 export function clearDealerIdentity(): void {
   localStorage.removeItem(IDENTITY_KEY);
+  notifyIdentityChanged();
+}
+
+/** End server phone session, clear tokens, and remove stored identity. */
+export async function switchDealerIdentity(): Promise<void> {
+  const current = readDealerIdentity();
+  if (current) {
+    clearStoredSessionToken(current.dealerId);
+    try {
+      await fetch(localApi("/api/dealer-control/phone/session/end"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dealerId: current.dealerId,
+          deviceId: getOrCreateDeviceId(),
+        }),
+      });
+    } catch {
+      // ignore network errors — local identity is still cleared
+    }
+  }
+  clearDealerIdentity();
+}
+
+export function subscribeDealerIdentityChanges(listener: () => void): () => void {
+  window.addEventListener(IDENTITY_CHANGED_EVENT, listener);
+  window.addEventListener("storage", listener);
+  return () => {
+    window.removeEventListener(IDENTITY_CHANGED_EVENT, listener);
+    window.removeEventListener("storage", listener);
+  };
 }

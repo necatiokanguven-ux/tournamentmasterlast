@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { localWsApi } from "../config/api";
 import { isWsEnabled } from "../config/featureFlags";
 import type { DealerTimerModeSetting } from "../types";
@@ -29,6 +29,8 @@ export function useDealerTimerWebSocket({
   const wsEnabled = isWsEnabled();
   const channel = tableNumber ? dealerTimerChannelForTable(tableNumber) : null;
   const hubActive = enabled && timerMode === "call_time" && Boolean(tableNumber) && wsEnabled;
+  const onTimerSnapshotRef = useRef(onTimerSnapshot);
+  onTimerSnapshotRef.current = onTimerSnapshot;
 
   useTournamentSocket({
     enabled: hubActive,
@@ -37,7 +39,7 @@ export function useDealerTimerWebSocket({
       if (!channel || !isChannelPayloadMessage(message) || message.channel !== channel) return;
       const payload = message.payload as { dealerTimer?: DealerTimerSnapshot | null };
       if (payload.dealerTimer) {
-        onTimerSnapshot(payload.dealerTimer);
+        onTimerSnapshotRef.current(payload.dealerTimer);
       }
     },
   });
@@ -62,7 +64,7 @@ export function useDealerTimerWebSocket({
           if (data.type !== "dealer_timer" || data.tableNumber !== tableNumber) {
             return;
           }
-          onTimerSnapshot(data.dealerTimer);
+          onTimerSnapshotRef.current(data.dealerTimer);
         } catch {
           // ignore malformed messages
         }
@@ -70,7 +72,7 @@ export function useDealerTimerWebSocket({
 
       socket.addEventListener("close", () => {
         if (cancelled) return;
-        reconnectTimer = window.setTimeout(connect, 1500);
+        reconnectTimer = window.setTimeout(connect, 400);
       });
 
       socket.addEventListener("error", () => {
@@ -87,5 +89,5 @@ export function useDealerTimerWebSocket({
       }
       socket?.close();
     };
-  }, [enabled, hubActive, onTimerSnapshot, tableNumber, timerMode]);
+  }, [enabled, hubActive, tableNumber, timerMode]);
 }

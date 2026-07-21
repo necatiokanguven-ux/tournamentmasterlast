@@ -4,7 +4,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, Loader2, RotateCcw } from "lucide-react";
+import { Camera, ChevronDown, Loader2, RotateCcw } from "lucide-react";
 import type { GeminiStatusResponse, IdScanFields } from "../idScan/types";
 import {
   computeRoiRect,
@@ -17,9 +17,16 @@ import {
 
 const GEMINI_STATUS_POLL_MS = 30_000;
 
+export type CameraOption = {
+  deviceId: string;
+  label: string;
+};
+
 type Props = {
   active: boolean;
   onResult: (fields: IdScanFields) => void;
+  cameraDeviceId?: string | null;
+  onCamerasDiscovered?: (cameras: CameraOption[]) => void;
 };
 
 function captureRoiFromVideo(video: HTMLVideoElement, insets: RoiInsets): string {
@@ -52,12 +59,13 @@ const INSET_FIELDS: { key: InsetKey; label: string }[] = [
   { key: "right", label: "Right" },
 ];
 
-export function IdScanPanel({ active, onResult }: Props) {
+export function IdScanPanel({ active, onResult, cameraDeviceId, onCamerasDiscovered }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanningRef = useRef(false);
 
   const [roiInsets, setRoiInsets] = useState<RoiInsets>(() => loadRoiInsets());
+  const [roiOpen, setRoiOpen] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -86,7 +94,7 @@ export function IdScanPanel({ active, onResult }: Props) {
         setGeminiStatus({
           configured: false,
           connected: false,
-          message: "Disconnect — license or server error.",
+          message: "Connection failed — license or server error.",
         });
         return;
       }
@@ -97,7 +105,7 @@ export function IdScanPanel({ active, onResult }: Props) {
       setGeminiStatus({
         configured: false,
         connected: false,
-        message: "Disconnect — cannot reach server.",
+        message: "Connection failed — cannot reach server.",
       });
     }
   }, []);
@@ -111,9 +119,13 @@ export function IdScanPanel({ active, onResult }: Props) {
 
     let cancelled = false;
 
+    const videoConstraints: MediaTrackConstraints = cameraDeviceId
+      ? { deviceId: { exact: cameraDeviceId } }
+      : { facingMode: "environment" };
+
     navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: "environment" }, audio: false })
-      .then((media) => {
+      .getUserMedia({ video: videoConstraints, audio: false })
+      .then(async (media) => {
         if (cancelled) {
           media.getTracks().forEach((track) => track.stop());
           return;
@@ -124,6 +136,19 @@ export function IdScanPanel({ active, onResult }: Props) {
           videoRef.current.srcObject = media;
         }
         setCameraError(null);
+
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const cameras = devices
+            .filter((device) => device.kind === "videoinput")
+            .map((device, index) => ({
+              deviceId: device.deviceId,
+              label: device.label || `Camera ${index + 1}`,
+            }));
+          onCamerasDiscovered?.(cameras);
+        } catch {
+          // ignore enumeration errors
+        }
       })
       .catch(() => {
         setCameraError("Camera access denied or unavailable.");
@@ -134,7 +159,7 @@ export function IdScanPanel({ active, onResult }: Props) {
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     };
-  }, [active]);
+  }, [active, cameraDeviceId, onCamerasDiscovered]);
 
   useEffect(() => {
     if (!active) {
@@ -161,7 +186,7 @@ export function IdScanPanel({ active, onResult }: Props) {
     }
 
     if (!geminiStatus.connected) {
-      setScanError(geminiStatus.message || "Gemini is not connected.");
+      setScanError(geminiStatus.message || "Connection failed.");
       return;
     }
 
@@ -223,33 +248,27 @@ export function IdScanPanel({ active, onResult }: Props) {
   const geminiConnected = geminiStatus.configured && geminiStatus.connected;
 
   return (
-    <div className="space-y-3 border border-zinc-800 rounded-xl p-4 bg-zinc-950/60">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">
-          ID scan — align card in frame, press Space
-        </p>
-        <div
-          className="flex items-center gap-2 shrink-0"
-          title={geminiStatus.message}
-        >
+    <div className="flex flex-col gap-2 border border-zinc-800 rounded-xl p-3 bg-zinc-950/60">
+      <div className="flex items-center justify-end gap-2">
+        <div className="flex items-center gap-2 shrink-0" title={geminiStatus.message}>
           <span
-            className={`w-2.5 h-2.5 rounded-full ${
+            className={`w-2 h-2 rounded-full ${
               geminiConnected
-                ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"
-                : "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]"
+                ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]"
+                : "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.8)]"
             }`}
           />
           <span
-            className={`text-[10px] font-black uppercase tracking-wider ${
+            className={`text-[10px] font-bold uppercase tracking-wider ${
               geminiConnected ? "text-emerald-400" : "text-red-400"
             }`}
           >
-            {geminiConnected ? "Connect Gemini" : "Disconnect"}
+            {geminiConnected ? "Connection successful" : "Connection failed"}
           </span>
         </div>
       </div>
 
-      <div className="relative rounded-lg overflow-hidden bg-black aspect-video">
+      <div className="relative rounded-lg overflow-hidden bg-black h-[200px]">
         <video
           ref={videoRef}
           autoPlay
@@ -268,9 +287,6 @@ export function IdScanPanel({ active, onResult }: Props) {
               bottom: `${roiInsets.bottom}%`,
             }}
           />
-          <div className="absolute bottom-2 left-0 right-0 text-center text-[10px] font-bold uppercase tracking-wider text-amber-300/90">
-            ROI — ID card area
-          </div>
         </div>
 
         {scanning && (
@@ -283,56 +299,75 @@ export function IdScanPanel({ active, onResult }: Props) {
         )}
       </div>
 
-      <div className="space-y-2 border border-zinc-800 rounded-xl p-3 bg-zinc-900/40">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">ROI configuration (%)</p>
-          <button
-            type="button"
-            onClick={resetRoiInsets}
-            className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 hover:text-amber-400 flex items-center gap-1"
-          >
-            <RotateCcw className="w-3 h-3" /> Reset ROI
-          </button>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          {INSET_FIELDS.map(({ key, label }) => (
-            <label key={key} className="space-y-1">
-              <span className="block text-[9px] font-bold uppercase tracking-wider text-zinc-500">{label}</span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min={0}
-                  max={45}
-                  value={roiInsets[key]}
-                  onChange={(event) => updateInset(key, Number(event.target.value))}
-                  className="flex-1 accent-amber-500"
-                />
-                <input
-                  type="number"
-                  min={0}
-                  max={45}
-                  value={roiInsets[key]}
-                  onChange={(event) => updateInset(key, Number(event.target.value))}
-                  className="w-12 bg-zinc-950 border border-zinc-800 rounded-md px-1.5 py-1 text-xs text-zinc-100 text-center"
-                />
-              </div>
-            </label>
-          ))}
-        </div>
-      </div>
-
-      {cameraError && <p className="text-xs text-red-400">{cameraError}</p>}
-      {scanError && <p className="text-xs text-red-400">{scanError}</p>}
+      {(cameraError || scanError) && (
+        <p className="text-[11px] text-red-400 leading-snug">
+          {cameraError || scanError}
+        </p>
+      )}
 
       <button
         type="button"
         disabled={scanning || !!cameraError || !geminiConnected}
         onClick={() => void runScan()}
-        className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-black uppercase flex items-center justify-center gap-2 disabled:opacity-50"
+        className="w-full py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-black uppercase flex items-center justify-center gap-2 disabled:opacity-50 shrink-0"
       >
         {scanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />}
         {scanning ? "Reading ID…" : "Capture & Scan (Space)"}
       </button>
+
+      <div className="border border-zinc-800 rounded-lg overflow-hidden shrink-0">
+        <button
+          type="button"
+          onClick={() => setRoiOpen((open) => !open)}
+          className="w-full flex items-center justify-between gap-2 px-3 py-2 bg-zinc-900/50 hover:bg-zinc-900/80 transition text-left"
+        >
+          <span className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">
+            ROI settings
+          </span>
+          <ChevronDown
+            className={`w-3.5 h-3.5 text-zinc-500 transition-transform ${roiOpen ? "rotate-180" : ""}`}
+          />
+        </button>
+
+        {roiOpen ? (
+          <div className="px-3 pb-3 pt-1 border-t border-zinc-800 bg-zinc-900/30 space-y-2">
+            <div className="flex items-center justify-end">
+              <button
+                type="button"
+                onClick={resetRoiInsets}
+                className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 hover:text-amber-400 flex items-center gap-1"
+              >
+                <RotateCcw className="w-3 h-3" /> Reset ROI
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {INSET_FIELDS.map(({ key, label }) => (
+                <label key={key} className="space-y-0.5">
+                  <span className="block text-[9px] font-bold uppercase tracking-wider text-zinc-500">{label}</span>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="range"
+                      min={0}
+                      max={45}
+                      value={roiInsets[key]}
+                      onChange={(event) => updateInset(key, Number(event.target.value))}
+                      className="flex-1 accent-amber-500 h-1"
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      max={45}
+                      value={roiInsets[key]}
+                      onChange={(event) => updateInset(key, Number(event.target.value))}
+                      className="w-10 bg-zinc-950 border border-zinc-800 rounded px-1 py-0.5 text-[10px] text-zinc-100 text-center"
+                    />
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

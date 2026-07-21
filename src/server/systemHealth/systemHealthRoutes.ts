@@ -1,11 +1,18 @@
 import type { Express, Request, Response } from "express";
 import type { TournamentDatabase } from "../tournamentDatabase";
 import type { TournamentSocketHub } from "../websocket/TournamentSocketHub";
+import { countActiveDealerDevicesByType } from "../../dealer/dealerRuntimeStore";
+import { disconnectLegacyDealerTimerClients } from "../../dealer/dealerTimerWebSocket";
 import {
   buildSystemHealthSnapshot,
   buildSystemHealthSummary,
 } from "./buildSystemHealthSnapshot";
 import { getRuntimeTuningState } from "./runtimeTuning";
+import {
+  applyVenueDeviceMode,
+  getVenueDeviceMode,
+  type VenueDeviceMode,
+} from "./venueDeviceMode";
 
 function isLocalRequest(req: Request): boolean {
   const remote = req.socket.remoteAddress ?? "";
@@ -19,7 +26,8 @@ function countActiveDealerPhones(db: TournamentDatabase, wsCount: number): numbe
     const seenAt = new Date(member.phoneLastSeenAt).getTime();
     return Number.isFinite(seenAt) && now - seenAt <= 120_000;
   }).length;
-  return Math.max(wsCount, seenRecently);
+  const registeredAtTable = countActiveDealerDevicesByType("phone");
+  return Math.max(wsCount, seenRecently, registeredAtTable);
 }
 
 export function registerSystemHealthRoutes(
@@ -38,7 +46,34 @@ export function registerSystemHealthRoutes(
       enabled: tuning.enabled,
       level: tuning.level,
       values: tuning.values,
+      venueDeviceMode: getVenueDeviceMode(),
     });
+  });
+
+  app.get("/api/admin/venue-device-mode", (req, res) => {
+    if (!isLocalRequest(req)) {
+      res.status(403).json({ error: "LOCAL_ONLY" });
+      return;
+    }
+    res.json({ mode: getVenueDeviceMode() });
+  });
+
+  app.put("/api/admin/venue-device-mode", (req, res) => {
+    if (!isLocalRequest(req)) {
+      res.status(403).json({ error: "LOCAL_ONLY" });
+      return;
+    }
+    const next = String(req.body?.mode ?? "") as VenueDeviceMode;
+    if (next !== "on" && next !== "limited" && next !== "off") {
+      res.status(400).json({ error: "INVALID_MODE" });
+      return;
+    }
+    const hub = getHub();
+    applyVenueDeviceMode(next, {
+      hub,
+      disconnectLegacyDealerTimers: () => disconnectLegacyDealerTimerClients("Venue mobile devices disabled by operator"),
+    });
+    res.json({ mode: getVenueDeviceMode() });
   });
 
   app.get("/api/admin/system-health/summary", (req, res) => {

@@ -21,7 +21,7 @@ import { isWsEnabled } from "./config/featureFlags";
 import { useTournamentSocket } from "./websocket/useTournamentSocket";
 import { isClockChannelPayload } from "./websocket/clockChannelTypes";
 import SystemHealthView from "./components/SystemHealthView";
-import { useSystemHealthNavStatus, toneClass, statusBadgeClass } from "./systemHealth/useSystemHealthNavStatus";
+import { useSystemHealthNavStatus, toneClass, statusBadgeClass, healthNavStatusClass } from "./systemHealth/useSystemHealthNavStatus";
 import { Timer, Settings, Users, Grid, FileText, ChevronLeft, ChevronRight, Monitor, KeyRound, Lock, UserCog, Shield } from "lucide-react";
 
 type AppTab = "clock" | "license" | "settings" | "players" | "tables" | "dealer-control" | "reports" | "display" | "system-health";
@@ -164,7 +164,7 @@ export default function App() {
               { id: "players", label: "Player Management", icon: Users, color: "text-blue-500" },
               { id: "settings", label: "Tournament Setup", icon: Settings, color: "text-amber-500" },
               { id: "dealer-control", label: "Dealer Control", icon: UserCog, color: "text-orange-500" },
-              { id: "system-health", label: "System Health Auto Protection", icon: Shield, color: "text-emerald-400", healthNav: true },
+              { id: "system-health", label: "System Health", icon: Shield, color: "text-emerald-400", healthNav: true },
               { id: "reports", label: "Tournament Reports", icon: FileText, color: "text-purple-500" }
             ].map((nav) => {
               const Icon = nav.icon;
@@ -238,17 +238,18 @@ export default function App() {
                             <span>{nav.label}</span>
                             {locked && <Lock className="w-3 h-3 text-zinc-600" />}
                           </div>
-                          <p className={`mt-1 text-[10px] font-bold leading-tight ${healthToneClass}`}>
-                            {systemHealthNav.primary}
-                            {systemHealthNav.secondary ? (
-                              <span className="text-zinc-500 font-semibold normal-case"> · {systemHealthNav.secondary}</span>
-                            ) : null}
-                          </p>
+                          <div className={`mt-1.5 flex items-center gap-2 min-w-0 ${healthNavStatusClass(systemHealthNav.status)}`}>
+                            <span className={`inline-block w-3 h-3 rounded-full shrink-0 ${statusBadgeClass(systemHealthNav.status)}`} />
+                            <p className={`text-[10px] font-bold leading-tight truncate ${healthToneClass}`}>
+                              {systemHealthNav.primary}
+                              {systemHealthNav.secondary ? (
+                                <span className="text-zinc-500 font-semibold normal-case"> · {systemHealthNav.secondary}</span>
+                              ) : null}
+                            </p>
+                          </div>
                         </div>
                       ) : (
-                        <span className={`text-[8px] font-bold leading-none ${healthToneClass}`}>
-                          {systemHealthNav.status === "green" ? "OK" : systemHealthNav.status === "red" ? "!" : "!"}
-                        </span>
+                        <span className={`inline-block w-2.5 h-2.5 rounded-full ${statusBadgeClass(systemHealthNav.status)} ${healthNavStatusClass(systemHealthNav.status)}`} />
                       )}
                     </div>
                   ) : (
@@ -279,7 +280,7 @@ export default function App() {
       {/* Main Panel Content Box */}
       <main
         className={`flex-1 flex flex-col min-h-0 ${
-          activeTab === "tables" ? "overflow-hidden" : "overflow-y-auto"
+          activeTab === "tables" || activeTab === "system-health" ? "overflow-hidden" : "overflow-y-auto"
         }`}
         id="main-content-canvas"
       >

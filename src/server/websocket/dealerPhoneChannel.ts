@@ -9,6 +9,7 @@ export type DealerPhoneChannelPayload = {
   dealerId: string;
   serverTime: number;
   tBreakMinutes: number;
+  tDealMinutes: number;
   tournamentBreak: TournamentBreakStatus;
   dealer: DealerStaff | null;
   action: DealerPhoneAction;
@@ -28,6 +29,7 @@ export function buildDealerPhoneChannelPayload(
   const now = Date.now();
   const tournamentBreak = getTournamentBreakStatus(db.settings, db.clock, now);
   const tBreakMinutes = db.dealerRotation.settings.tBreakMinutes;
+  const tDealMinutes = db.dealerRotation.settings.tDealMinutes;
 
   let latestNote = latestNotification ?? null;
   if (!latestNote) {
@@ -41,9 +43,16 @@ export function buildDealerPhoneChannelPayload(
     dealerId,
     serverTime: now,
     tBreakMinutes,
+    tDealMinutes,
     tournamentBreak,
     dealer,
-    action: dealer ? getDealerPhoneAction(dealer, latestNote, { tournamentBreak }) : { kind: "none" },
+    action: dealer
+      ? getDealerPhoneAction(dealer, latestNote, {
+          tournamentBreak,
+          staff: db.dealerRotation.staff,
+          serverTime: now,
+        })
+      : { kind: "none" },
   };
 }
 

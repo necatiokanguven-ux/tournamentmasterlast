@@ -18,7 +18,8 @@ function createRunningTimer(
   duration: number,
 ): DealerTimerState {
   const totalSeconds = Math.max(1, Math.round(duration));
-  const startedAtMs = now;
+  // Align to wall-clock second so 30→29 flips exactly on each second boundary.
+  const startedAtMs = Math.floor(now / 1000) * 1000;
 
   return {
     ...current,
@@ -56,12 +57,22 @@ function pruneStaleDevices(devices: DealerDeviceSession[], now: number): DealerD
   return devices.filter((device) => now - device.lastSeenMs <= DEALER_DEVICE_STALE_MS);
 }
 
-function touchDevice(runtime: TableRuntime, deviceId: string, now: number): boolean {
+function normalizeDeviceType(value: unknown): "tablet" | "phone" {
+  return value === "phone" ? "phone" : "tablet";
+}
+
+function touchDevice(
+  runtime: TableRuntime,
+  deviceId: string,
+  deviceType: "tablet" | "phone",
+  now: number,
+): boolean {
   runtime.devices = pruneStaleDevices(runtime.devices, now);
   const existing = runtime.devices.find((device) => device.deviceId === deviceId);
 
   if (existing) {
     existing.lastSeenMs = now;
+    existing.deviceType = deviceType;
     return true;
   }
 
@@ -71,6 +82,7 @@ function touchDevice(runtime: TableRuntime, deviceId: string, now: number): bool
 
   runtime.devices.push({
     deviceId,
+    deviceType,
     lastSeenMs: now,
     registeredAt: new Date(now).toISOString(),
   });
@@ -88,6 +100,7 @@ function bumpTimer(runtime: TableRuntime, next: DealerTimerState, now: number) {
 export function registerDealerDevice(
   tableNumber: number,
   deviceId: string,
+  deviceType: "tablet" | "phone" = "tablet",
 ): { ok: true; connectedDevices: number } | { ok: false; error: string } {
   const trimmed = deviceId.trim();
   if (!trimmed) {
@@ -96,7 +109,7 @@ export function registerDealerDevice(
 
   const now = Date.now();
   const runtime = getTableRuntime(tableNumber);
-  const allowed = touchDevice(runtime, trimmed, now);
+  const allowed = touchDevice(runtime, trimmed, normalizeDeviceType(deviceType), now);
 
   if (!allowed) {
     return { ok: false, error: "DEVICE_LIMIT" };
@@ -109,6 +122,7 @@ export function registerDealerDevice(
 export function heartbeatDealerDevice(
   tableNumber: number,
   deviceId: string | null,
+  deviceType: "tablet" | "phone" | null = null,
 ): { connectedDevices: number; deviceAccepted: boolean } {
   const runtime = getTableRuntime(tableNumber);
   const now = Date.now();
@@ -124,7 +138,21 @@ export function heartbeatDealerDevice(
   }
 
   existing.lastSeenMs = now;
+  if (deviceType) {
+    existing.deviceType = normalizeDeviceType(deviceType);
+  }
   return { connectedDevices: runtime.devices.length, deviceAccepted: true };
+}
+
+export function getConnectedDealerDeviceTypes(tableNumber: number): Array<"tablet" | "phone"> {
+  const runtime = getTableRuntime(tableNumber);
+  const now = Date.now();
+  runtime.devices = pruneStaleDevices(runtime.devices, now);
+  const types = new Set<"tablet" | "phone">();
+  for (const device of runtime.devices) {
+    types.add(normalizeDeviceType(device.deviceType));
+  }
+  return [...types];
 }
 
 export function getDealerTimerSnapshot(tableNumber: number): DealerTimerSnapshot {
@@ -209,14 +237,19 @@ export function resetDealerTimerForTable(tableNumber: number): void {
   bumpTimer(runtime, next, now);
 }
 
-export function countActiveDealerTablets(): number {
+export function countActiveDealerDevicesByType(deviceType: "tablet" | "phone"): number {
   const now = Date.now();
   let count = 0;
   for (const runtime of runtimeByTable.values()) {
     runtime.devices = pruneStaleDevices(runtime.devices, now);
-    count += runtime.devices.length;
+    count += runtime.devices.filter((device) => device.deviceType === deviceType).length;
   }
   return count;
+}
+
+/** Table tablets only — not dealer phones registered to the same table runtime. */
+export function countActiveDealerTablets(): number {
+  return countActiveDealerDevicesByType("tablet");
 }
 
 export function resetDealerTimerForAllTables(): void {

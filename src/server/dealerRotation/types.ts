@@ -58,6 +58,8 @@ export interface DealerStaff {
   stateBeforeDisconnect: DealerRotationState | null;
   /** Phase 6 — dealer zone assignment (null = unassigned). */
   zoneId: string | null;
+  /** Dedup key for 2-minute upcoming-task warnings (deal/break end timestamp). */
+  upcomingWarnKey: string | null;
 }
 
 export type OperatorAlertType =
@@ -135,7 +137,14 @@ export type DealerNotificationType =
   | "MOVED_TO_WAITING"
   | "MOVED_TO_POOL"
   | "EMERGENCY_CALL"
-  | "TOURNAMENT_BREAK";
+  | "TOURNAMENT_BREAK"
+  | "UPCOMING_TASK";
+
+/** Structured upcoming-task hint — UI renders a clear label from this. */
+export type UpcomingTaskKind =
+  | "rotation_end"
+  | "return_to_table"
+  | "table_deal";
 
 export interface DealerNotification {
   id: string;
@@ -143,6 +152,7 @@ export interface DealerNotification {
   type: DealerNotificationType;
   message: string;
   tableNumber: number | null;
+  taskKind?: UpcomingTaskKind | null;
   createdAt: string;
   readAt: string | null;
 }
@@ -241,12 +251,18 @@ export function normalizeDealerRotation(raw: Partial<DealerRotationData> | undef
           phoneGraceUntil: s.phoneGraceUntil ?? null,
           stateBeforeDisconnect: s.stateBeforeDisconnect ?? null,
           zoneId: s.zoneId ?? null,
+          upcomingWarnKey: s.upcomingWarnKey ?? null,
         }))
       : [],
     poolQueue: Array.isArray(raw.poolQueue) ? [...raw.poolQueue] : [],
     waitingList: Array.isArray(raw.waitingList) ? [...raw.waitingList] : [],
     workLog: Array.isArray(raw.workLog) ? raw.workLog.map(e => ({ ...e })) : [],
-    notifications: Array.isArray(raw.notifications) ? raw.notifications.map(n => ({ ...n })) : [],
+    notifications: Array.isArray(raw.notifications)
+      ? raw.notifications.map(n => ({
+          ...n,
+          taskKind: n.taskKind ?? null,
+        }))
+      : [],
     operatorAlerts: Array.isArray(raw.operatorAlerts) ? raw.operatorAlerts.map(a => ({ ...a })) : [],
     dismissedOperatorAlertKeys: Array.isArray(raw.dismissedOperatorAlertKeys)
       ? [...raw.dismissedOperatorAlertKeys]

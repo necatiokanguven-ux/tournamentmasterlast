@@ -53,6 +53,45 @@ function applyKioskMeta(rootClass: string) {
   }
 }
 
+function isFullscreenActive() {
+  return Boolean(
+    document.fullscreenElement ||
+      (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement,
+  );
+}
+
+async function exitAppFullscreen(): Promise<void> {
+  const doc = document as Document & {
+    webkitExitFullscreen?: () => Promise<void>;
+    msExitFullscreen?: () => Promise<void>;
+  };
+  if (document.fullscreenElement) {
+    await document.exitFullscreen?.();
+  } else if (doc.webkitExitFullscreen) {
+    await doc.webkitExitFullscreen();
+  } else if (doc.msExitFullscreen) {
+    await doc.msExitFullscreen();
+  }
+}
+
+async function lockLandscapeOrientation(): Promise<void> {
+  try {
+    const orientation = screen.orientation as ScreenOrientation & {
+      lock?: (orientation: string) => Promise<void>;
+    };
+    await orientation.lock?.("landscape-primary");
+  } catch {
+    try {
+      const orientation = screen.orientation as ScreenOrientation & {
+        lock?: (orientation: string) => Promise<void>;
+      };
+      await orientation.lock?.("landscape");
+    } catch {
+      // Browser may block without fullscreen/user gesture.
+    }
+  }
+}
+
 async function requestAppFullscreen() {
   const element = document.documentElement;
 
@@ -101,28 +140,20 @@ export function useAppKioskMode(rootClass = "dealer-kiosk") {
     void requestAppFullscreen();
     nudgeBrowserChromeHidden();
 
-    const enterOnInteraction = () => {
-      void requestAppFullscreen();
-      nudgeBrowserChromeHidden();
-    };
-
     const enterOnKey = (event: KeyboardEvent) => {
       if (!isTvFullscreenKey(event)) {
         return;
       }
       event.preventDefault();
-      enterOnInteraction();
+      void requestAppFullscreen();
+      nudgeBrowserChromeHidden();
     };
 
-    document.addEventListener("click", enterOnInteraction, { passive: true });
-    document.addEventListener("touchstart", enterOnInteraction, { passive: true });
     document.addEventListener("keydown", enterOnKey);
 
     return () => {
       document.documentElement.classList.remove(rootClass);
       document.body.classList.remove(rootClass);
-      document.removeEventListener("click", enterOnInteraction);
-      document.removeEventListener("touchstart", enterOnInteraction);
       document.removeEventListener("keydown", enterOnKey);
     };
   }, [rootClass]);
@@ -132,4 +163,11 @@ export function useDealerKioskMode() {
   useAppKioskMode("dealer-kiosk");
 }
 
-export { requestAppFullscreen, nudgeBrowserChromeHidden };
+export {
+  applyKioskMeta,
+  exitAppFullscreen,
+  isFullscreenActive,
+  lockLandscapeOrientation,
+  nudgeBrowserChromeHidden,
+  requestAppFullscreen,
+};

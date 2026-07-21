@@ -2,7 +2,7 @@
 ; Build: packaging\installer\build-installer.ps1
 
 #define AppName "Tournament Master"
-#define AppVersion "1.0.7"
+#define AppVersion "1.0.8"
 #define AppPublisher "PokerClup"
 #define AppURL "https://pokerclup.com"
 #define AppExeName "TourMasterLauncher.bat"

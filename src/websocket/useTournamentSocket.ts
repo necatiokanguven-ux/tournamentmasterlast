@@ -102,5 +102,16 @@ export function useTournamentSocket(options: UseTournamentSocketOptions = {}): T
     };
   }, [enabled]);
 
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!enabled || !socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    for (const channel of channels) {
+      socket.send(JSON.stringify({ type: "subscribe", channel }));
+    }
+  }, [channels, enabled]);
+
   return { connected, enabled, reconnecting, lastError };
 }

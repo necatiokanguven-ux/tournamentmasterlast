@@ -8,6 +8,7 @@ import {
   type DealerRotationSettings,
   type DealerRotationState,
   type DealerStaff,
+  type UpcomingTaskKind,
   type DealerWorkLogEntry,
   type DealerWorkLogEvent,
   type OperatorAlertType,
@@ -15,7 +16,8 @@ import {
   type TableRef,
 } from "./types";
 import { isDealerInPhoneGrace } from "./phoneGrace";
-import { repairDealerTimingFields, isDealStintExpired } from "../../dealerRotation/dealerTimeUtils";
+import { repairDealerTimingFields, isDealStintExpired, isOutgoingHandoffWait, resolveBreakStartedAt } from "../../dealerRotation/dealerTimeUtils";
+import { formatUpcomingTaskMessage } from "../../dealer/upcomingTaskMessages";
 import {
   mergeCoverageAlerts,
 } from "../../dealerRotation/dealerCoverageUtils";
@@ -44,6 +46,9 @@ function createId(prefix: string): string {
 
 /** Grace period before auto-completing a handoff when replacement has not confirmed on phone. */
 const HANDOFF_CONFIRM_GRACE_MS = 3 * 60_000;
+/** Warn dealers this many ms before their next task. */
+const UPCOMING_TASK_WARN_MS = 2 * 60_000;
+const UPCOMING_TASK_TICK_WINDOW_MS = 6_000;
 
 export type RotationEngineResult = {
   data: DealerRotationData;
@@ -102,10 +107,49 @@ export class DealerQueueManager {
   }
 
   updateSettings(partial: Partial<DealerRotationSettings>): void {
+    const prev = { ...this.data.settings };
     const patch = Object.fromEntries(
       Object.entries(partial).filter(([, value]) => value !== undefined),
     ) as Partial<DealerRotationSettings>;
     this.data.settings = { ...this.data.settings, ...patch };
+
+    const now = new Date();
+    if (
+      patch.tDealMinutes !== undefined
+      && patch.tDealMinutes !== prev.tDealMinutes
+    ) {
+      this.applyTDealToActiveStints(now);
+    }
+    if (
+      patch.tBreakMinutes !== undefined
+      && patch.tBreakMinutes !== prev.tBreakMinutes
+    ) {
+      this.applyTBreakToActiveBreaks(now);
+    }
+  }
+
+  private applyTDealToActiveStints(now: Date): void {
+    const tDealMs = this.data.settings.tDealMinutes * 60_000;
+    for (const dealer of this.data.staff) {
+      if (dealer.state !== "on_table" || !dealer.dealStartedAt) continue;
+      const startMs = new Date(dealer.dealStartedAt).getTime();
+      if (!Number.isFinite(startMs)) continue;
+      dealer.dealEndAt = new Date(startMs + tDealMs).toISOString();
+      dealer.upcomingWarnKey = null;
+    }
+  }
+
+  private applyTBreakToActiveBreaks(now: Date): void {
+    const tBreakMs = this.data.settings.tBreakMinutes * 60_000;
+    for (const dealer of this.data.staff) {
+      if (dealer.state !== "on_break") continue;
+      const startedAt = resolveBreakStartedAt(dealer, this.data.settings);
+      if (!startedAt) continue;
+      const startMs = new Date(startedAt).getTime();
+      if (!Number.isFinite(startMs)) continue;
+      dealer.breakEndAt = new Date(startMs + tBreakMs).toISOString();
+      dealer.upcomingWarnKey = null;
+    }
   }
 
   private getStaff(dealerId: string): DealerStaff | undefined {
@@ -118,6 +162,7 @@ export class DealerQueueManager {
     message: string,
     tableNumber: number | null = null,
     now = new Date(),
+    taskKind: UpcomingTaskKind | null = null,
   ): void {
     this.pendingNotifications.push({
       id: createId("dn"),
@@ -125,9 +170,25 @@ export class DealerQueueManager {
       type,
       message,
       tableNumber,
+      taskKind,
       createdAt: nowIso(now),
       readAt: null,
     });
+  }
+
+  private findBlockingOutgoingHandoff(
+    tableId: string,
+    incomingDealerId: string,
+    now: Date,
+  ): DealerStaff | undefined {
+    const nowMs = now.getTime();
+    return this.data.staff.find(
+      (member) =>
+        member.id !== incomingDealerId
+        && member.tableId === tableId
+        && isOutgoingHandoffWait(member, nowMs)
+        && !member.releaseAckAt,
+    );
   }
 
   private logWork(
@@ -479,7 +540,7 @@ export class DealerQueueManager {
     dealer.dealStartedAt = nowIso(now);
   }
 
-  upsertStaff(input: Omit<DealerStaff, "state" | "tableId" | "tableNumber" | "dealEndAt" | "breakEndAt" | "sessionStartedAt" | "dealStartedAt" | "breakStartedAt" | "assignmentAckAt" | "releaseAckAt" | "lastDutyChangeAt" | "dutyAckAt" | "emergencyCallAt" | "emergencyAckAt" | "sessionDealSeconds" | "sessionBreakSeconds" | "shiftActive" | "shiftStartedAt" | "sessionStaffSeconds" | "totalStaffMinutes" | "totalWorkMinutes" | "phoneSessionToken" | "phoneDeviceId" | "phoneLastSeenAt" | "phoneGraceUntil" | "stateBeforeDisconnect" | "zoneId"> & { totalWorkMinutes?: number; role?: string; zoneId?: string | null }): DealerStaff {
+  upsertStaff(input: Omit<DealerStaff, "state" | "tableId" | "tableNumber" | "dealEndAt" | "breakEndAt" | "sessionStartedAt" | "dealStartedAt" | "breakStartedAt" | "assignmentAckAt" | "releaseAckAt" | "lastDutyChangeAt" | "dutyAckAt" | "emergencyCallAt" | "emergencyAckAt" | "sessionDealSeconds" | "sessionBreakSeconds" | "shiftActive" | "shiftStartedAt" | "sessionStaffSeconds" | "totalStaffMinutes" | "totalWorkMinutes" | "phoneSessionToken" | "phoneDeviceId" | "phoneLastSeenAt" | "phoneGraceUntil" | "stateBeforeDisconnect" | "zoneId" | "upcomingWarnKey"> & { totalWorkMinutes?: number; role?: string; zoneId?: string | null }): DealerStaff {
     const role = (input.role ?? "dealer").trim() || "dealer";
     const existing = this.getStaff(input.id);
     if (existing) {
@@ -533,6 +594,7 @@ export class DealerQueueManager {
       phoneGraceUntil: null,
       stateBeforeDisconnect: null,
       zoneId: input.zoneId ?? null,
+      upcomingWarnKey: null,
     };
     this.data.staff.push(created);
     if (rotationDealer && !this.data.poolQueue.includes(created.id)) {
@@ -1007,6 +1069,14 @@ export class DealerQueueManager {
       );
 
       if (replacement && (outgoing || activeDealer)) {
+        if (activeDealer) {
+          continue;
+        }
+
+        if (outgoing && !outgoing.releaseAckAt) {
+          continue;
+        }
+
         const assignedAt = replacement.dealStartedAt
           ? new Date(replacement.dealStartedAt).getTime()
           : 0;
@@ -1065,6 +1135,24 @@ export class DealerQueueManager {
 
   /** Phone — dealer accepted table assignment in one step (going + seated). */
   acceptTableAssignment(dealerId: string, tableId: string, now = new Date()): boolean {
+    return this.getAcceptTableAssignmentError(dealerId, tableId, now) === null
+      && this.completeTableAssignmentAccept(dealerId, tableId, now);
+  }
+
+  getAcceptTableAssignmentError(dealerId: string, tableId: string, now = new Date()): string | null {
+    const dealer = this.getStaff(dealerId);
+    if (!dealer || dealer.state !== "incoming" || !dealer.tableId || dealer.tableId !== tableId || dealer.dealEndAt) {
+      return "ACCEPT_FAILED";
+    }
+
+    if (this.findBlockingOutgoingHandoff(tableId, dealerId, now)) {
+      return "OUTGOING_HANDOFF_PENDING";
+    }
+
+    return null;
+  }
+
+  private completeTableAssignmentAccept(dealerId: string, tableId: string, now = new Date()): boolean {
     const dealer = this.getStaff(dealerId);
     if (!dealer || dealer.state !== "incoming" || !dealer.tableId || dealer.tableId !== tableId || dealer.dealEndAt) {
       return false;
@@ -1099,10 +1187,17 @@ export class DealerQueueManager {
     if (!dealer || dealer.state !== "incoming" || !dealer.dealEndAt) {
       return false;
     }
+
     dealer.releaseAckAt = nowIso(now);
     dealer.dutyAckAt = nowIso(now);
     this.markNotificationsRead(dealerId, ["END_SHIFT_AT_TABLE"], now);
     this.logWork(dealer, "released", dealer.tableNumber, now, { note: "Acknowledged rotation end" });
+
+    this.clearTableAssignment(dealer, now);
+    this.removeFromQueues(dealer.id);
+    this.data.poolQueue.push(dealer.id);
+    this.startBreak(dealerId, now, true);
+
     return true;
   }
 
@@ -1373,6 +1468,7 @@ export class DealerQueueManager {
     }
 
     repairDealerTimingFields(this.data.staff, this.data.settings, now);
+    this.processUpcomingTaskWarnings(activeTables, now);
     if (!this.data.settings.handoffFrozen) {
       this.resolveStuckHandoffs(activeTables, now);
     }
@@ -1390,6 +1486,101 @@ export class DealerQueueManager {
     }
 
     this.refreshCoverageAlerts(activeTables, now);
+  }
+
+  /** Notify dealers ~2 minutes before their next task (break, assignment, or break end). */
+  private processUpcomingTaskWarnings(activeTables: TableRef[], now: Date): void {
+    const nowMs = now.getTime();
+    const standbyId = this.findStandbyId();
+
+    for (const dealer of this.data.staff) {
+      if (!dealer.active || !isRotationDealer(dealer)) continue;
+
+      if (dealer.state === "on_table" && dealer.dealEndAt && dealer.tableNumber) {
+        const endMs = new Date(dealer.dealEndAt).getTime();
+        if (!Number.isFinite(endMs)) continue;
+        const remainingMs = endMs - nowMs;
+        if (
+          remainingMs <= UPCOMING_TASK_WARN_MS
+          && remainingMs > UPCOMING_TASK_WARN_MS - UPCOMING_TASK_TICK_WINDOW_MS
+        ) {
+          const warnKey = `deal:${dealer.dealEndAt}`;
+          if (dealer.upcomingWarnKey !== warnKey) {
+            dealer.upcomingWarnKey = warnKey;
+            const taskKind: UpcomingTaskKind = "rotation_end";
+            this.pushNotification(
+              dealer.id,
+              "UPCOMING_TASK",
+              formatUpcomingTaskMessage(taskKind, dealer.tableNumber),
+              dealer.tableNumber,
+              now,
+              taskKind,
+            );
+          }
+        }
+      }
+
+      if (dealer.state === "on_break" && dealer.breakEndAt) {
+        const endMs = new Date(dealer.breakEndAt).getTime();
+        if (!Number.isFinite(endMs)) continue;
+        const remainingMs = endMs - nowMs;
+        if (
+          remainingMs <= UPCOMING_TASK_WARN_MS
+          && remainingMs > UPCOMING_TASK_WARN_MS - UPCOMING_TASK_TICK_WINDOW_MS
+        ) {
+          const warnKey = `break:${dealer.breakEndAt}`;
+          if (dealer.upcomingWarnKey !== warnKey) {
+            dealer.upcomingWarnKey = warnKey;
+            const returnTable = dealer.tableNumber;
+            if (returnTable == null) {
+              continue;
+            }
+            const taskKind: UpcomingTaskKind = "return_to_table";
+            this.pushNotification(
+              dealer.id,
+              "UPCOMING_TASK",
+              formatUpcomingTaskMessage(taskKind, returnTable),
+              returnTable,
+              now,
+              taskKind,
+            );
+          }
+        }
+      }
+    }
+
+    if (!standbyId) return;
+
+    for (const table of activeTables) {
+      const onTable = this.data.staff.find(
+        s => s.tableId === table.id && s.state === "on_table" && s.dealEndAt,
+      );
+      if (!onTable?.dealEndAt) continue;
+
+      const endMs = new Date(onTable.dealEndAt).getTime();
+      if (!Number.isFinite(endMs)) continue;
+      const remainingMs = endMs - nowMs;
+      if (
+        remainingMs <= UPCOMING_TASK_WARN_MS
+        && remainingMs > UPCOMING_TASK_WARN_MS - UPCOMING_TASK_TICK_WINDOW_MS
+      ) {
+        const standby = this.getStaff(standbyId);
+        if (!standby) continue;
+        const warnKey = `standby:${onTable.dealEndAt}:${table.number}`;
+        if (standby.upcomingWarnKey !== warnKey) {
+          standby.upcomingWarnKey = warnKey;
+          const taskKind: UpcomingTaskKind = "table_deal";
+          this.pushNotification(
+            standbyId,
+            "UPCOMING_TASK",
+            formatUpcomingTaskMessage(taskKind, table.number),
+            table.number,
+            now,
+            taskKind,
+          );
+        }
+      }
+    }
   }
 
   /** Tournament structure break — all dealers rest; table assignments preserved. */

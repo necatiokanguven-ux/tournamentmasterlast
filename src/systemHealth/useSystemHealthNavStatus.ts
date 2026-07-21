@@ -76,8 +76,13 @@ export function statusBadgeClass(status: SystemHealthNavStatus["status"]): strin
     case "orange":
       return "bg-orange-500";
     case "red":
-      return "bg-red-500";
+      return "bg-red-500 animate-pulse";
     default:
       return "bg-zinc-500";
   }
+}
+
+/** Silent visual alert — red status only; no sound. */
+export function healthNavStatusClass(status: SystemHealthNavStatus["status"]): string {
+  return status === "red" ? "animate-pulse" : "";
 }

@@ -2,6 +2,7 @@ import type { IncomingMessage } from "http";
 import type { Server as HttpServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import type { DealerTimerSnapshot } from "./dealerTimerTypes";
+import { getVenueDeviceMode } from "../server/systemHealth/venueDeviceMode";
 
 type TimerMessage = {
   type: "dealer_timer";
@@ -69,6 +70,12 @@ export function attachDealerTimerWebSocketUpgrade(_server: HttpServer) {
       return false;
     }
 
+    if (getVenueDeviceMode() === "off") {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return true;
+    }
+
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit("connection", ws, request, tableNumber);
     });
@@ -103,6 +110,13 @@ export function broadcastDealerTimer(tableNumber: number, dealerTimer: DealerTim
     if (client.readyState === WebSocket.OPEN) {
       client.send(message);
     }
+  }
+}
+
+export function disconnectLegacyDealerTimerClients(reason: string): void {
+  if (!timerWss) return;
+  for (const client of timerWss.clients) {
+    client.close(1001, reason);
   }
 }
 

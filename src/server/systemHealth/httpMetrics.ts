@@ -1,8 +1,7 @@
 type LatencyBucket = {
   count: number;
   totalMs: number;
-  maxMs: number;
-  windowStartedAt: number;
+  latencies: number[];
 };
 
 export type TrafficChannel =
@@ -15,26 +14,28 @@ export type TrafficChannel =
   | "other";
 
 const WINDOW_MS = 60_000;
+/** Ignore latency-based protection until enough real samples exist. */
+export const MIN_SAMPLES_FOR_P95 = 30;
+const MAX_SAMPLES_PER_BUCKET = 180;
 
 const buckets: Record<TrafficChannel, LatencyBucket> = {
-  dealerTablet: { count: 0, totalMs: 0, maxMs: 0, windowStartedAt: Date.now() },
-  dealerPhone: { count: 0, totalMs: 0, maxMs: 0, windowStartedAt: Date.now() },
-  dealerControl: { count: 0, totalMs: 0, maxMs: 0, windowStartedAt: Date.now() },
-  tracking: { count: 0, totalMs: 0, maxMs: 0, windowStartedAt: Date.now() },
-  floor: { count: 0, totalMs: 0, maxMs: 0, windowStartedAt: Date.now() },
-  display: { count: 0, totalMs: 0, maxMs: 0, windowStartedAt: Date.now() },
-  other: { count: 0, totalMs: 0, maxMs: 0, windowStartedAt: Date.now() },
+  dealerTablet: { count: 0, totalMs: 0, latencies: [] },
+  dealerPhone: { count: 0, totalMs: 0, latencies: [] },
+  dealerControl: { count: 0, totalMs: 0, latencies: [] },
+  tracking: { count: 0, totalMs: 0, latencies: [] },
+  floor: { count: 0, totalMs: 0, latencies: [] },
+  display: { count: 0, totalMs: 0, latencies: [] },
+  other: { count: 0, totalMs: 0, latencies: [] },
 };
 
 let recentRequests = 0;
 let recentErrors = 0;
 let windowStartedAt = Date.now();
 
-function resetBucket(bucket: LatencyBucket, now: number) {
+function resetBucket(bucket: LatencyBucket) {
   bucket.count = 0;
   bucket.totalMs = 0;
-  bucket.maxMs = 0;
-  bucket.windowStartedAt = now;
+  bucket.latencies = [];
 }
 
 function maybeRollWindow(now: number) {
@@ -43,8 +44,22 @@ function maybeRollWindow(now: number) {
   recentRequests = 0;
   recentErrors = 0;
   for (const bucket of Object.values(buckets)) {
-    resetBucket(bucket, now);
+    resetBucket(bucket);
   }
+}
+
+function pushLatency(bucket: LatencyBucket, durationMs: number) {
+  bucket.latencies.push(durationMs);
+  if (bucket.latencies.length > MAX_SAMPLES_PER_BUCKET) {
+    bucket.latencies.shift();
+  }
+}
+
+function computeP95(latencies: number[]): number {
+  if (latencies.length < MIN_SAMPLES_FOR_P95) return 0;
+  const sorted = [...latencies].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1);
+  return Math.round(sorted[index] ?? 0);
 }
 
 export function classifyRequestPath(path: string, userAgent: string | undefined): TrafficChannel {
@@ -69,16 +84,9 @@ export function recordHttpRequest(channel: TrafficChannel, durationMs: number, i
   if (isError) recentErrors += 1;
 
   const bucket = buckets[channel];
-  if (now - bucket.windowStartedAt >= WINDOW_MS) {
-    resetBucket(bucket, now);
-  }
   bucket.count += 1;
   bucket.totalMs += durationMs;
-  bucket.maxMs = Math.max(bucket.maxMs, durationMs);
-}
-
-function percentile(maxMs: number, avgMs: number): number {
-  return Math.round(maxMs * 0.85 + avgMs * 0.15);
+  pushLatency(bucket, durationMs);
 }
 
 export type ChannelMetricsSnapshot = {
@@ -87,13 +95,16 @@ export type ChannelMetricsSnapshot = {
   avgMs: number;
   p95Ms: number;
   count: number;
+  p95Reliable: boolean;
 };
 
 export type HttpMetricsSnapshot = {
   totalReqPerSec: number;
+  totalRequestCount: number;
   errorRatePercent: number;
   channels: ChannelMetricsSnapshot[];
   overallP95Ms: number;
+  p95Reliable: boolean;
 };
 
 export function getHttpMetricsSnapshot(): HttpMetricsSnapshot {
@@ -104,21 +115,28 @@ export function getHttpMetricsSnapshot(): HttpMetricsSnapshot {
   const channels = (Object.keys(buckets) as TrafficChannel[]).map((channel) => {
     const bucket = buckets[channel];
     const avgMs = bucket.count > 0 ? bucket.totalMs / bucket.count : 0;
+    const p95Reliable = bucket.latencies.length >= MIN_SAMPLES_FOR_P95;
+    const p95Ms = computeP95(bucket.latencies);
     return {
       channel,
       reqPerSec: Math.round((bucket.count / windowSec) * 10) / 10,
       avgMs: Math.round(avgMs),
-      p95Ms: percentile(bucket.maxMs, avgMs),
+      p95Ms,
       count: bucket.count,
+      p95Reliable,
     };
   });
 
-  const overallP95Ms = channels.reduce((max, row) => Math.max(max, row.p95Ms), 0);
+  const allLatencies = channels.flatMap((row) => buckets[row.channel].latencies);
+  const p95Reliable = allLatencies.length >= MIN_SAMPLES_FOR_P95;
+  const overallP95Ms = computeP95(allLatencies);
 
   return {
     totalReqPerSec: Math.round((recentRequests / windowSec) * 10) / 10,
+    totalRequestCount: recentRequests,
     errorRatePercent: recentRequests > 0 ? Math.round((recentErrors / recentRequests) * 1000) / 10 : 0,
     channels,
     overallP95Ms,
+    p95Reliable,
   };
 }

@@ -1,11 +1,18 @@
 import type { TournamentDatabase } from "../tournamentDatabase";
-import { countActiveDealerTablets } from "../../dealer/dealerRuntimeStore";
+import { countActiveDealerDevicesByType } from "../../dealer/dealerRuntimeStore";
 import { getHttpMetricsSnapshot } from "./httpMetrics";
 import { getHostMetricsSnapshot } from "./hostMetrics";
 import { countActiveQrDevices } from "./qrDeviceTracker";
 import { getRuntimeTuningState, isAutoProtectionEnabled } from "./runtimeTuning";
-import { getNavStatusLabel, getSystemHealthStatus, tickAutoProtection } from "./throttleEngine";
+import {
+  getLastHealthEvaluation,
+  getNavStatusLabel,
+  getSystemHealthStatus,
+  setAutoProtectionContext,
+  tickAutoProtection,
+} from "./throttleEngine";
 import { getTuningAuditLog } from "./tuningAuditLog";
+import { getVenueDeviceMode, type VenueDeviceMode } from "./venueDeviceMode";
 
 export type WsChannelCounts = {
   dealerPhone: number;
@@ -21,6 +28,13 @@ export type SystemHealthSnapshot = {
   nav: ReturnType<typeof getNavStatusLabel>;
   uptimeMs: number;
   persistence: string;
+  evaluation: {
+    inGracePeriod: boolean;
+    graceRemainingMs: number;
+    hasVenueLoad: boolean;
+    p95Reliable: boolean;
+    triggers: string[];
+  };
   autoProtection: {
     enabled: boolean;
     level: number;
@@ -39,29 +53,45 @@ export type SystemHealthSnapshot = {
   traffic: ReturnType<typeof getHttpMetricsSnapshot>;
   recommendations: string[];
   recentActions: ReturnType<typeof getTuningAuditLog>;
+  venueDeviceMode: VenueDeviceMode;
 };
+
+function countConnectedDevices(
+  devices: SystemHealthSnapshot["devices"],
+): number {
+  return devices.dealerTablets + devices.dealerPhones + devices.floorPhones + devices.qrPhones;
+}
 
 function buildRecommendations(
   status: ReturnType<typeof getSystemHealthStatus>,
   devices: SystemHealthSnapshot["devices"],
-  traffic: ReturnType<typeof getHttpMetricsSnapshot>,
+  evaluation: SystemHealthSnapshot["evaluation"],
   host: ReturnType<typeof getHostMetricsSnapshot>,
 ): string[] {
   const tips: string[] = [];
 
   if (host.ramPercent >= 95) {
     tips.push(
-      `System RAM is ${host.ramPercent}% — informational only. Close unused browser tabs if the PC feels slow.`,
+      `Host memory is ${host.ramPercent}% — informational only on Windows venue PCs. Close unused browser tabs if the PC feels slow.`,
     );
   }
 
+  if (evaluation.inGracePeriod) {
+    tips.push("Startup calibration in progress — auto protection stays idle while the server settles.");
+    return tips;
+  }
+
+  if (!evaluation.p95Reliable) {
+    tips.push("Latency stats need more traffic before p95 is used for protection decisions.");
+  }
+
   if (status === "green") {
-    tips.push("System is stable. Current device load is within safe range.");
+    tips.push("System is stable. Current device load is within normal range.");
     return tips;
   }
 
   if (status === "yellow") {
-    tips.push("Load is rising. Auto Protection may slow device refresh if needed.");
+    tips.push("Load is elevated but the tournament can continue. Auto Protection may adjust refresh if needed.");
     if (devices.dealerTablets >= 20) {
       tips.push("Dealer tablet count is high — avoid adding more tablets.");
     }
@@ -69,15 +99,12 @@ function buildRecommendations(
   }
 
   if (status === "orange") {
-    tips.push("Auto Protection is active — do not add new devices.");
+    tips.push("High sustained load — avoid adding new devices.");
     tips.push("Keep Dealer Control open. Tournament can continue.");
-    if (traffic.channels.find(c => c.channel === "dealerTablet")?.reqPerSec ?? 0 > 10) {
-      tips.push("Most load is from dealer tablets.");
-    }
     return tips;
   }
 
-  tips.push("Critical load — do not connect more phones or tablets.");
+  tips.push("Critical sustained load — do not connect more phones or tablets.");
   tips.push("Use Backup if problems persist.");
   return tips;
 }
@@ -94,23 +121,34 @@ export function buildSystemHealthSnapshot(
 ): SystemHealthSnapshot {
   const host = getHostMetricsSnapshot();
   const traffic = getHttpMetricsSnapshot();
-  tickAutoProtection(host, traffic);
 
-  const tuning = getRuntimeTuningState();
-  const status = getSystemHealthStatus();
-  const nav = getNavStatusLabel(status, tuning.level > 0, tuning.level);
-
-  const dealerTablets = countActiveDealerTablets();
+  const tableTablets = countActiveDealerDevicesByType("tablet");
+  const tablePhones = countActiveDealerDevicesByType("phone");
   const qrPhones = countActiveQrDevices();
 
   const devices = {
     openTables: db.tables.length,
-    dealerTablets,
-    dealerPhones: Math.max(options.wsChannels.dealerPhone, 0),
+    dealerTablets: tableTablets,
+    dealerPhones: Math.max(options.wsChannels.dealerPhone, tablePhones),
     floorPhones: Math.max(options.wsChannels.floor, 0),
     qrPhones,
     wsClients: options.wsClients,
   };
+
+  const connectedDevices = countConnectedDevices(devices);
+  setAutoProtectionContext({ uptimeMs: options.uptimeMs, connectedDevices });
+
+  const tuning = getRuntimeTuningState();
+  const status = getSystemHealthStatus();
+  const evaluationState = getLastHealthEvaluation();
+  const evaluation = {
+    inGracePeriod: evaluationState?.inGracePeriod ?? false,
+    graceRemainingMs: evaluationState?.graceRemainingMs ?? 0,
+    hasVenueLoad: evaluationState?.hasVenueLoad ?? false,
+    p95Reliable: evaluationState?.p95Reliable ?? traffic.p95Reliable,
+    triggers: evaluationState?.triggers ?? [],
+  };
+  const nav = getNavStatusLabel(status, tuning.level, evaluationState);
 
   return {
     generatedAt: Date.now(),
@@ -118,6 +156,7 @@ export function buildSystemHealthSnapshot(
     nav,
     uptimeMs: options.uptimeMs,
     persistence: options.persistence,
+    evaluation,
     autoProtection: {
       enabled: isAutoProtectionEnabled(),
       level: tuning.level,
@@ -127,8 +166,9 @@ export function buildSystemHealthSnapshot(
     devices,
     host,
     traffic,
-    recommendations: buildRecommendations(status, devices, traffic, host),
+    recommendations: buildRecommendations(status, devices, evaluation, host),
     recentActions: getTuningAuditLog(20),
+    venueDeviceMode: getVenueDeviceMode(),
   };
 }
 
@@ -140,16 +180,36 @@ export function buildSystemHealthSummary(
     wsClients: number;
     wsChannels: WsChannelCounts;
   },
-): Pick<SystemHealthSnapshot, "generatedAt" | "status" | "nav" | "autoProtection"> {
+): Pick<SystemHealthSnapshot, "generatedAt" | "status" | "nav" | "autoProtection" | "evaluation"> {
   const host = getHostMetricsSnapshot();
   const traffic = getHttpMetricsSnapshot();
-  tickAutoProtection(host, traffic);
+
+  const tableTablets = countActiveDealerDevicesByType("tablet");
+  const tablePhones = countActiveDealerDevicesByType("phone");
+  const qrPhones = countActiveQrDevices();
+  const connectedDevices =
+    tableTablets
+    + Math.max(options.wsChannels.dealerPhone, tablePhones)
+    + Math.max(options.wsChannels.floor, 0)
+    + qrPhones;
+
+  setAutoProtectionContext({ uptimeMs: options.uptimeMs, connectedDevices });
+
   const tuning = getRuntimeTuningState();
   const status = getSystemHealthStatus();
+  const evaluationState = getLastHealthEvaluation();
+
   return {
     generatedAt: Date.now(),
     status,
-    nav: getNavStatusLabel(status, isAutoProtectionEnabled() && tuning.level > 0, tuning.level),
+    nav: getNavStatusLabel(status, tuning.level, evaluationState),
+    evaluation: {
+      inGracePeriod: evaluationState?.inGracePeriod ?? false,
+      graceRemainingMs: evaluationState?.graceRemainingMs ?? 0,
+      hasVenueLoad: evaluationState?.hasVenueLoad ?? false,
+      p95Reliable: evaluationState?.p95Reliable ?? traffic.p95Reliable,
+      triggers: evaluationState?.triggers ?? [],
+    },
     autoProtection: {
       enabled: isAutoProtectionEnabled(),
       level: tuning.level,

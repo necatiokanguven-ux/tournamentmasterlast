@@ -58,6 +58,13 @@ export function startPhoneSession(
   return token;
 }
 
+export function endPhoneSession(dealer: DealerStaff): void {
+  dealer.phoneSessionToken = null;
+  dealer.phoneDeviceId = null;
+  dealer.phoneLastSeenAt = null;
+  clearPhoneGrace(dealer);
+}
+
 export function processPhoneGraceExpiries(staff: DealerStaff[], now = Date.now()): boolean {
   let changed = false;
 

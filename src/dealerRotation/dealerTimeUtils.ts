@@ -38,6 +38,22 @@ export function isIncomingReplacement(dealer: DealerStaff): boolean {
   return dealer.state === "incoming" && Boolean(dealer.tableId) && !dealer.dealEndAt;
 }
 
+/** Outgoing dealer still at table until they acknowledge release (blocks incoming accept). */
+export function findBlockingOutgoingHandoff(
+  staff: DealerStaff[],
+  tableId: string,
+  incomingDealerId: string,
+  now = Date.now(),
+): DealerStaff | undefined {
+  return staff.find(
+    (member) =>
+      member.id !== incomingDealerId
+      && member.tableId === tableId
+      && isOutgoingHandoffWait(member, now)
+      && !member.releaseAckAt,
+  );
+}
+
 export function getDisplayDealerForTable(
   staff: DealerStaff[],
   tableId: string,

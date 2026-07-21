@@ -1,9 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
-import CircularCountdown from "./CircularCountdown";
 import { useDealerTablePoll } from "./useDealerTablePoll";
-import { useSyncedDealerCountdown } from "./useSyncedDealerCountdown";
-import { useDealerTimerWebSocket } from "./useDealerTimerWebSocket";
 import { getDealerDeviceId } from "./dealerDeviceId";
 import { localApi } from "../config/api";
 import { formatDealerTableTiming, getCurrentTableDealSeconds, getDealRemainingSeconds } from "../dealerRotation/dealerTimeUtils";
@@ -15,10 +12,14 @@ import { dealerHref } from "./dealerPaths";
 import type { DealerSeatSnapshot } from "./useDealerTablePoll";
 import DealerAssignmentOverlay from "./DealerAssignmentOverlay";
 import DealerPhoneSessionBar from "./DealerPhoneSessionBar";
+import DealerTabletKioskControl from "./DealerTabletKioskControl";
+import TabletTimerPanel from "./TabletTimerPanel";
 import { formatPhoneDutyLabel } from "./dealerDutyLabel";
-import { readDealerIdentity } from "./dealerIdentity";
+import { readDealerIdentity, subscribeDealerIdentityChanges } from "./dealerIdentity";
 import { useDealerPhoneAction } from "./useDealerPhoneAction";
 import { dealerNeedsLoungeScreen } from "./dealerTableAccess";
+import type { MobileTranslations } from "../mobile/translations";
+import DealerSeatListRow, { SeatNumberBadgeForDialog } from "./DealerSeatListRow";
 
 type DealerTabletViewProps = {
   tableNumber: number;
@@ -29,6 +30,35 @@ function formatClock(secs: number): string {
   const m = Math.floor(secs / 60).toString().padStart(2, "0");
   const s = (secs % 60).toString().padStart(2, "0");
   return `${m}:${s}`;
+}
+
+function formatConnectedDeviceLabels(
+  types: Array<"tablet" | "phone">,
+  t: MobileTranslations,
+): string {
+  const labels: string[] = [];
+  if (types.includes("tablet")) {
+    labels.push(t.tableTablet);
+  }
+  if (types.includes("phone")) {
+    labels.push(t.dealerPhone);
+  }
+  return labels.length > 0 ? labels.join(" · ") : "—";
+}
+
+function resolveConnectedDeviceTypes(
+  types: Array<"tablet" | "phone"> | undefined,
+  isRegistered: boolean,
+  currentDevice: DealerDeviceType,
+): Array<"tablet" | "phone"> {
+  const unique = [...new Set((types ?? []).filter((type) => type === "tablet" || type === "phone"))];
+  if (unique.length > 0) {
+    return unique;
+  }
+  if (isRegistered) {
+    return [currentDevice === "phone" ? "phone" : "tablet"];
+  }
+  return [];
 }
 
 function padSeats(seats: DealerSeatSnapshot[]): DealerSeatSnapshot[] {
@@ -58,34 +88,61 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
   const [registrationError, setRegistrationError] = useState<string | null>(null);
   const [playersExpanded, setPlayersExpanded] = useState(!isPhone);
 
-  const { snapshot, dealerTimer, connectedDevices, error, isLoading, refresh, applyDealerTimerSnapshot } =
-    useDealerTablePoll(tableNumber, true, deviceId);
+  const { snapshot, dealerTimer, connectedDeviceTypes, error, isLoading, refresh, applyDealerTimerSnapshot } =
+    useDealerTablePoll(tableNumber, true, deviceId, isPhone ? "phone" : "tablet");
 
   const timerMode: DealerTimerModeSetting = snapshot?.timerSettings.mode ?? "call_time";
   const showTimer = timerMode !== "none";
 
-  useDealerTimerWebSocket({
-    tableNumber,
-    timerMode,
-    enabled: showTimer && isRegistered,
-    onTimerSnapshot: applyDealerTimerSnapshot,
-  });
+  const callTimeSeconds = snapshot?.timerSettings.callTimeSeconds ?? 30;
+  const playerTimeSeconds = snapshot?.timerSettings.playerTimeSeconds ?? 60;
 
-  const countdown = useSyncedDealerCountdown({
-    tableNumber,
-    deviceId,
-    serverTimer: showTimer ? dealerTimer : null,
-    isRegistered,
-    onTimerSnapshot: applyDealerTimerSnapshot,
-  });
+  const [phoneTimerBusy, setPhoneTimerBusy] = useState(false);
+  const [phoneTimerSent, setPhoneTimerSent] = useState(false);
+
+  const handlePhoneTimerTrigger = useCallback(async () => {
+    if (!isRegistered || phoneTimerBusy || !showTimer) {
+      return;
+    }
+
+    setPhoneTimerBusy(true);
+    setActionMessage(null);
+
+    try {
+      const action = timerMode === "player_time" ? "start_player" : "start_call";
+      const response = await fetch(localApi(`/api/dealer/table/${tableNumber}/timer`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, deviceId }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "TIMER_ACTION_FAILED");
+      }
+
+      setPhoneTimerSent(true);
+      window.setTimeout(() => setPhoneTimerSent(false), 1200);
+    } catch (triggerError) {
+      setActionMessage(
+        triggerError instanceof Error ? triggerError.message : "Could not start call time.",
+      );
+    } finally {
+      setPhoneTimerBusy(false);
+    }
+  }, [deviceId, isRegistered, phoneTimerBusy, showTimer, tableNumber, timerMode]);
 
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [floorMessage, setFloorMessage] = useState<string | null>(null);
-  const [dealerIdentity] = useState(() => readDealerIdentity());
+  const [dealerIdentity, setDealerIdentity] = useState(() => readDealerIdentity());
+
+  useEffect(() => subscribeDealerIdentityChanges(() => {
+    setDealerIdentity(readDealerIdentity());
+  }), []);
   const [overlayActive, setOverlayActive] = useState(false);
-  const { dealer: myDealerState } = useDealerPhoneAction(dealerIdentity?.dealerId ?? null, 1000);
+  const { dealer: myDealerState, loading: phoneStateLoading } =
+    useDealerPhoneAction(dealerIdentity?.dealerId ?? null, 1000);
   const offTableAssignment = Boolean(
     dealerIdentity && myDealerState && dealerNeedsLoungeScreen(myDealerState, tableNumber),
   );
@@ -97,11 +154,11 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
   }, [myDealerState, dealerIdentity]);
 
   useEffect(() => {
-    if (!dealerIdentity || !myDealerState) return;
+    if (!dealerIdentity || phoneStateLoading || !myDealerState) return;
     if (dealerNeedsLoungeScreen(myDealerState, tableNumber)) {
       window.location.replace(dealerHref("/dealer/checkin"));
     }
-  }, [dealerIdentity, myDealerState, tableNumber]);
+  }, [dealerIdentity, myDealerState, phoneStateLoading, tableNumber]);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,7 +168,7 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
         const response = await fetch(localApi(`/api/dealer/table/${tableNumber}/register`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ deviceId }),
+          body: JSON.stringify({ deviceId, deviceType: isPhone ? "phone" : "tablet" }),
         });
         const data = await response.json();
 
@@ -122,6 +179,7 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
         if (!cancelled) {
           setIsRegistered(true);
           setRegistrationError(null);
+          void refresh();
         }
       } catch (registerError) {
         if (!cancelled) {
@@ -138,7 +196,7 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
     return () => {
       cancelled = true;
     };
-  }, [deviceId, tableNumber]);
+  }, [deviceId, isPhone, refresh, tableNumber]);
 
   const selectedSeat = useMemo(
     () => snapshot?.seats.find((seat) => seat.playerId === selectedPlayerId) ?? null,
@@ -199,7 +257,6 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
   };
 
   const actionLabel = timerMode === "player_time" ? t.playerTime : t.callTime;
-  const actionHandler = timerMode === "player_time" ? countdown.startPlayerTime : countdown.startCallTime;
 
   const registrationMessage =
     registrationError === "DEVICE_LIMIT"
@@ -208,13 +265,6 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
 
   const displaySeats = useMemo(() => padSeats(snapshot?.seats ?? []), [snapshot?.seats]);
   const seatedCount = displaySeats.filter((seat) => !seat.isOpen).length;
-
-  const timerDisplaySeconds =
-    showTimer && countdown.totalSeconds > 0
-      ? countdown.secondsRemaining
-      : timerMode === "call_time"
-        ? snapshot?.timerSettings.callTimeSeconds ?? 30
-        : snapshot?.timerSettings.playerTimeSeconds ?? 60;
 
   const blindsValue = snapshot?.clock.currentBlinds ?? placeholder;
   const nextBlindsValue = snapshot?.clock.nextBlinds ?? placeholder;
@@ -238,6 +288,15 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
     return formatDealerTableTiming(pseudoDealer, dealSeconds, remaining);
   }, [liveNow, snapshot]);
 
+  const connectedDeviceLabel = formatConnectedDeviceLabels(
+    resolveConnectedDeviceTypes(
+      snapshot?.connectedDeviceTypes ?? connectedDeviceTypes,
+      isRegistered,
+      deviceType,
+    ),
+    t,
+  );
+
   const header = (
     <header className="shrink-0" style={{ paddingTop: 8, paddingBottom: 8 }}>
       <div className="flex items-start justify-between gap-2">
@@ -258,9 +317,8 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
           </span>
         </div>
       </div>
-      <p className="mt-1 truncate text-xs text-zinc-500">{snapshot?.tournamentName ?? t.loading}</p>
-      <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-zinc-600">
-        Synced devices: {connectedDevices}/2
+      <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-zinc-600">
+        Synced: {connectedDeviceLabel}
       </p>
       <p className="mt-0.5 truncate text-[10px] font-bold uppercase tracking-wider text-amber-400/90">
         Dealer: {snapshot?.dealerName ?? (isLoading ? "..." : "—")}
@@ -279,29 +337,15 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
   );
 
   const seatList = (
-    <div className="flex flex-col" style={{ gap: 4 }}>
+    <div className="flex flex-col" style={{ gap: 3 }}>
       {displaySeats.map((seat) => (
-        <div
+        <DealerSeatListRow
           key={seat.seatIndex}
-          className={`flex h-[28px] items-center gap-2 rounded-lg border px-2 ${
-            seat.isOpen
-              ? "border-dashed border-zinc-800/80 bg-zinc-950/40 text-zinc-600"
-              : "border-zinc-800 bg-zinc-900/80"
-          }`}
-        >
-          <SeatNumberBadge number={seat.seatNumber} isOpen={seat.isOpen} />
-          <span className="min-w-0 flex-1 truncate text-[11px] font-bold uppercase">
-            {seat.isOpen ? t.seatOpen : seat.displayName}
-          </span>
-          <button
-            type="button"
-            disabled={seat.isOpen || !seat.playerId || !isRegistered}
-            onClick={() => seat.playerId && handleBustRequest(seat.playerId)}
-            className="shrink-0 rounded border border-red-500/40 px-2 py-0.5 text-[9px] font-black uppercase text-red-400 disabled:opacity-30"
-          >
-            OUT
-          </button>
-        </div>
+          seat={seat}
+          seatOpenLabel={t.seatOpen}
+          isRegistered={isRegistered}
+          onBust={handleBustRequest}
+        />
       ))}
     </div>
   );
@@ -322,13 +366,13 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
           <ChevronDown className="h-4 w-4 text-zinc-500" />
         )}
       </button>
-      {playersExpanded ? <div className="mt-2">{seatList}</div> : null}
+      {playersExpanded ? (
+        <div className="mt-2 max-h-[min(38vh,260px)] overflow-y-auto overscroll-contain">{seatList}</div>
+      ) : null}
     </div>
   );
 
-  const playerSectionTablet = (
-    <div className="min-h-0 flex-1 overflow-y-auto">{seatList}</div>
-  );
+  const playerSectionTablet = seatList;
 
   const floorButton = (
     <button
@@ -355,27 +399,30 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
     </div>
   );
 
-  const timerSection = showTimer ? (
-    <>
-      <div className="flex shrink-0 items-center justify-center py-2" style={{ minHeight: 170 }}>
-        <CircularCountdown
-          secondsRemaining={timerDisplaySeconds}
-          totalSeconds={countdown.totalSeconds || timerDisplaySeconds}
-          ringColor={countdown.ringColor}
-          diameter={140}
-          strokeWidth={12}
-        />
-      </div>
-      <button
-        type="button"
-        disabled={!isRegistered}
-        onClick={actionHandler}
-        className="shrink-0 rounded-xl bg-amber-500 text-sm font-black uppercase tracking-wider text-black disabled:opacity-50"
-        style={{ height: 48 }}
-      >
-        {actionLabel}
-      </button>
-    </>
+  const phoneCallTimeButton = showTimer && isPhone ? (
+    <button
+      type="button"
+      disabled={!isRegistered || phoneTimerBusy}
+      onClick={() => void handlePhoneTimerTrigger()}
+      className="shrink-0 rounded-2xl bg-amber-500 py-7 text-2xl font-black uppercase tracking-wider text-black shadow-lg shadow-amber-500/25 disabled:opacity-50"
+    >
+      {phoneTimerSent ? "✓ STARTED" : actionLabel}
+    </button>
+  ) : null;
+
+  const tabletTimerPanel = !isPhone ? (
+    <TabletTimerPanel
+      tableNumber={tableNumber}
+      deviceId={deviceId}
+      timerMode={timerMode}
+      showTimer={showTimer}
+      isRegistered={isRegistered}
+      callTimeSeconds={callTimeSeconds}
+      playerTimeSeconds={playerTimeSeconds}
+      serverTimer={dealerTimer ?? snapshot?.dealerTimer ?? null}
+      actionLabel={actionLabel}
+      onTimerSnapshot={applyDealerTimerSnapshot}
+    />
   ) : null;
 
   const statusMessages = (
@@ -389,7 +436,12 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
 
   return (
     <div className="min-h-[100dvh] overflow-y-auto bg-[#0B0B0B] text-zinc-100">
-      {isPhone && dutyLabel && !overlayActive ? <DealerPhoneSessionBar dutyLabel={dutyLabel} /> : null}
+      {isPhone && dutyLabel && !overlayActive ? (
+        <DealerPhoneSessionBar
+          dutyLabel={dutyLabel}
+          changeDealerHref={dealerHref("/dealer/checkin")}
+        />
+      ) : null}
       {dealerIdentity ? (
         <DealerAssignmentOverlay
           dealerId={dealerIdentity.dealerId}
@@ -417,30 +469,34 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
           {playerSectionPhone}
           {floorButton}
           {tournamentInfo}
-          {timerSection}
+          {phoneCallTimeButton}
           {statusMessages}
         </div>
       ) : null}
       {!isPhone ? (
-        <div
-          className="mx-auto flex min-h-[100dvh] w-full max-w-[1024px] flex-row gap-4 p-4"
-          style={{ minHeight: "100dvh" }}
-        >
-          <aside className="flex w-[38%] max-w-[380px] shrink-0 flex-col" style={{ gap: 10 }}>
-            {header}
-            <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
-              {t.players} ({seatedCount}/{displaySeats.length})
-            </p>
-            {playerSectionTablet}
-          </aside>
+        <>
+          <DealerTabletKioskControl enabled />
+          <div
+            className="mx-auto flex h-[100dvh] min-h-0 w-full max-w-[1024px] flex-row gap-4 overflow-hidden p-4"
+          >
+            <aside className="flex h-full min-h-0 w-[38%] max-w-[380px] shrink-0 flex-col overflow-hidden" style={{ gap: 8 }}>
+              {header}
+              <p className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                {t.players} ({seatedCount}/{displaySeats.length})
+              </p>
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5">
+                {playerSectionTablet}
+              </div>
+            </aside>
 
-          <section className="flex min-w-0 flex-1 flex-col" style={{ gap: 10 }}>
-            {floorButton}
-            {tournamentInfo}
-            {timerSection}
-            {statusMessages}
-          </section>
-        </div>
+            <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" style={{ gap: 10 }}>
+              {floorButton}
+              {tournamentInfo}
+              {tabletTimerPanel}
+              {statusMessages}
+            </section>
+          </div>
+        </>
       ) : null}
 
       {confirmOpen && selectedSeat ? (
@@ -451,7 +507,7 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
               <h2 className="text-lg font-black uppercase tracking-wider">{t.eliminatePlayer}</h2>
             </div>
             <div className="mt-5 flex items-center gap-3">
-              <SeatNumberBadge number={selectedSeat.seatNumber} isOpen={false} />
+              <SeatNumberBadgeForDialog number={selectedSeat.seatNumber} country={selectedSeat.country} />
               <p className="min-w-0 flex-1 text-lg font-black uppercase text-zinc-100">
                 {selectedSeat.displayName}
               </p>
@@ -477,21 +533,6 @@ export default function DealerTabletView({ tableNumber, deviceType = "tablet" }:
         </div>
       ) : null}
     </div>
-  );
-}
-
-function SeatNumberBadge({ number, isOpen }: { number: number; isOpen: boolean }) {
-  return (
-    <span
-      className={`flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border text-[10px] font-black tabular-nums leading-none ${
-        isOpen
-          ? "border-zinc-700 text-zinc-600"
-          : "border-amber-500/50 bg-amber-500/10 text-amber-400"
-      }`}
-      aria-label={`Seat ${number}`}
-    >
-      {number}
-    </span>
   );
 }
 

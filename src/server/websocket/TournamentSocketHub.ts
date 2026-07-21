@@ -36,6 +36,8 @@ import {
   type DealerTimerChannelPayload,
 } from "./dealerTimerChannel";
 import type { DealerTimerSnapshot } from "../../dealer/dealerTimerTypes";
+import { getDealerTimerSnapshot } from "../../dealer/dealerRuntimeStore";
+import { getVenueDeviceMode, isMobileWsChannel } from "../systemHealth/venueDeviceMode";
 
 type DbAccessor = () => TournamentDatabase;
 
@@ -246,6 +248,18 @@ export class TournamentSocketHub {
     };
   }
 
+  disconnectMobileClients(reason: string): void {
+    for (const client of this.wss.clients) {
+      const meta = this.socketMeta.get(client);
+      const hasMobileChannel = meta
+        ? [...meta.channels].some((channel) => isMobileWsChannel(channel))
+        : false;
+      if (hasMobileChannel) {
+        client.close(1001, reason);
+      }
+    }
+  }
+
   close(): void {
     for (const client of this.wss.clients) {
       client.close(1001, "Server shutting down");
@@ -379,6 +393,16 @@ export class TournamentSocketHub {
       return;
     }
 
+    if (getVenueDeviceMode() === "off" && isMobileWsChannel(normalized)) {
+      this.send(socket, {
+        type: "error",
+        code: "VENUE_DEVICES_OFF",
+        message: "Venue mobile channels are disabled by operator.",
+      });
+      socket.close(1001, "Venue mobile devices disabled");
+      return;
+    }
+
     const meta = this.socketMeta.get(socket) ?? { channels: new Set(), dealerPhoneId: null };
     meta.channels.add(normalized);
 
@@ -494,14 +518,13 @@ export class TournamentSocketHub {
 
     const timerTableNumber = parseDealerTimerChannel(channel);
     if (timerTableNumber) {
+      const dealerTimer = getDealerTimerSnapshot(timerTableNumber);
+      const payload = buildDealerTimerChannelPayload(timerTableNumber, dealerTimer);
       this.send(socket, {
         type: "snapshot",
         channel,
-        payload: {
-          tableNumber: timerTableNumber,
-          dealerTimer: null,
-        } satisfies DealerTimerChannelPayload,
-        version: 0,
+        payload,
+        version: dealerTimer.revision,
       });
     }
   }
