@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 APP_NAME="Tournament Master"
-STAGING_APP="$ROOT/release/TourMasterMac.app"
+STAGING_APP="$ROOT/release/Tournament Master.app"
 DMG_PATH="$ROOT/release/TourMasterMac.dmg"
 VOLUME_NAME="Tournament Master"
 BUILD_DIR="$ROOT/release/.dmg-build"

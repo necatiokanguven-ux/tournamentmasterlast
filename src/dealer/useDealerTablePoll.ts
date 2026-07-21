@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { localApi } from "../config/api";
 import type { DealerTimerModeSetting } from "../types";
+import { useRuntimeTuningPollMs } from "../systemHealth/useRuntimeTuning";
 import { mergeTrackingLiveState, type TrackingLiveState } from "../tracking/liveState";
 import type { DealerTimerSnapshot } from "./dealerTimerTypes";
 
@@ -78,8 +79,7 @@ type DealerTablePayload = {
   connectedDevices?: number;
 };
 
-const LIVE_POLL_MS = 500;
-const TABLE_POLL_MS = 500;
+const DEFAULT_TABLET_POLL_MS = 500;
 
 function mapLiveToDealerClock(live: TrackingLiveState): DealerClockSnapshot {
   return {
@@ -103,6 +103,7 @@ export function useDealerTablePoll(
   enabled: boolean,
   deviceId: string | null,
 ) {
+  const tabletPollMs = useRuntimeTuningPollMs("dealerTabletPollMs", DEFAULT_TABLET_POLL_MS);
   const [liveState, setLiveState] = useState<TrackingLiveState | null>(null);
   const [tableData, setTableData] = useState<DealerTablePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -207,12 +208,12 @@ export function useDealerTablePoll(
     void fetchLiveState();
     const liveTimer = window.setInterval(() => {
       void fetchLiveState();
-    }, LIVE_POLL_MS);
+    }, tabletPollMs);
 
     return () => {
       window.clearInterval(liveTimer);
     };
-  }, [enabled, fetchLiveState]);
+  }, [enabled, fetchLiveState, tabletPollMs]);
 
   useEffect(() => {
     if (!enabled || !tableNumber) {
@@ -222,12 +223,12 @@ export function useDealerTablePoll(
     void fetchTableData();
     const tableTimer = window.setInterval(() => {
       void fetchTableData();
-    }, TABLE_POLL_MS);
+    }, tabletPollMs);
 
     return () => {
       window.clearInterval(tableTimer);
     };
-  }, [enabled, tableNumber, fetchTableData]);
+  }, [enabled, tableNumber, fetchTableData, tabletPollMs]);
 
   const snapshot = useMemo<DealerTableSnapshot | null>(() => {
     if (!liveState) {

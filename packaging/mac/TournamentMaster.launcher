@@ -5,8 +5,10 @@ APP_SERVER="$(cd "$(dirname "$0")/../Resources/server" && pwd)"
 DATA_DIR="$APP_SERVER/data"
 mkdir -p "$DATA_DIR"
 
-if ! command -v node >/dev/null 2>&1; then
-  osascript -e 'display alert "Node.js required" message "Install Node.js 18+ from https://nodejs.org/ then try again." as critical'
+. "$APP_SERVER/scripts/resolve-node-mac.sh"
+NODE_BIN="$(resolve_mac_node "$APP_SERVER")"
+if [ -z "$NODE_BIN" ]; then
+  osascript -e 'display alert "Tournament Master" message "Server runtime is missing. Re-install TourMasterMac.dmg." as critical'
   exit 1
 fi
 
@@ -17,11 +19,11 @@ if lsof -Pi :3000 -sTCP:LISTEN -t >/dev/null 2>&1; then
 fi
 
 if [ ! -f "$APP_SERVER/dist/server.cjs" ]; then
-  osascript -e 'display alert "Tournament Master" message "Server files are missing. Re-install TourMasterMac.zip." as critical'
+  osascript -e 'display alert "Tournament Master" message "Server files are missing. Re-install TourMasterMac.dmg." as critical'
   exit 1
 fi
 
-RUN_LINE="cd '$APP_SERVER' && export NODE_ENV=production TM_AUTO_OPEN_BROWSER=1 TM_DATA_DIR='$DATA_DIR' && echo 'Tournament Master — keep this window open during the tournament.' && echo 'Data: $DATA_DIR' && node dist/server.cjs"
+RUN_LINE="cd '$APP_SERVER' && export NODE_ENV=production TM_AUTO_OPEN_BROWSER=1 TM_DATA_DIR='$DATA_DIR' && echo 'Tournament Master — keep this window open during the tournament.' && echo 'Data: $DATA_DIR' && '$NODE_BIN' dist/server.cjs"
 
 osascript <<APPLESCRIPT
 tell application "Terminal"

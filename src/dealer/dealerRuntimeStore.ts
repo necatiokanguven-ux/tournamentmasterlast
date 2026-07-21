@@ -209,6 +209,16 @@ export function resetDealerTimerForTable(tableNumber: number): void {
   bumpTimer(runtime, next, now);
 }
 
+export function countActiveDealerTablets(): number {
+  const now = Date.now();
+  let count = 0;
+  for (const runtime of runtimeByTable.values()) {
+    runtime.devices = pruneStaleDevices(runtime.devices, now);
+    count += runtime.devices.length;
+  }
+  return count;
+}
+
 export function resetDealerTimerForAllTables(): void {
   for (const tableNumber of runtimeByTable.keys()) {
     resetDealerTimerForTable(tableNumber);

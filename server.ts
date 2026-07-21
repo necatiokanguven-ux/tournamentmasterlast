@@ -40,6 +40,10 @@ import {
   registerWsRpc,
 } from "./src/server/websocket/wsRpcDispatcher";
 import { buildAdminDashboardSnapshot } from "./src/server/adminDashboard";
+import { createSystemHealthMiddleware } from "./src/server/systemHealth/systemHealthMiddleware";
+import { registerSystemHealthRoutes } from "./src/server/systemHealth/systemHealthRoutes";
+import { startHostMetricsSampler } from "./src/server/systemHealth/hostMetrics";
+import { startAutoProtectionEngine } from "./src/server/systemHealth/throttleEngine";
 import { createIdScanRouter } from "./src/server/idScan/idScanRoutes";
 import { buildLocalUrl, getLocalNetworkAddresses, getPrimaryLocalAddress } from "./src/server/localNetwork";
 import { openDirectorBrowser } from "./src/server/openBrowser";
@@ -218,6 +222,10 @@ async function bootstrap() {
 
   app.use(express.json({ limit: "6mb" }));
   applyLocalServerCors(app);
+  app.use(createSystemHealthMiddleware());
+
+  startHostMetricsSampler();
+  startAutoProtectionEngine();
 
   app.get("/api/data", licenseGuard, (_req, res) => {
     res.json(getDb());
@@ -430,6 +438,11 @@ async function bootstrap() {
   app.use("/api/players", licenseGuard, createIdScanRouter());
 
   registerLicenseRoutes(app);
+
+  registerSystemHealthRoutes(app, getDb, () => socketHub, {
+    uptimeMs: () => Math.round(process.uptime() * 1000),
+    persistence: () => repository.backend,
+  });
 
   await startServer(dealerControlRouter, dealerRotationTrigger);
 }

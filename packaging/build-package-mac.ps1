@@ -1,28 +1,32 @@
-# Build TourMasterMac.app + TourMasterMac.zip (macOS end-user package)
+# Build TourMasterMac.app + TourMasterMac.dmg (macOS end-user package)
 
 param(
   [string]$StagingDir = "",
   [string]$AppBundlePath = "",
-  [string]$OutputZip = "",
+  [string]$OutputDmg = "",
   [switch]$SkipBuild
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $AppName = "Tournament Master"
+$ReleaseDir = Join-Path $Root "release\installer"
 
 if (-not $StagingDir) {
   $StagingDir = Join-Path $Root "release\TourMasterMac-staging"
 }
 if (-not $AppBundlePath) {
-  $AppBundlePath = Join-Path $Root "release\TourMasterMac.app"
+  $AppBundlePath = Join-Path $Root "release\Tournament Master.app"
 }
-if (-not $OutputZip) {
-  $OutputZip = Join-Path $Root "release\TourMasterMac.zip"
+if (-not $OutputDmg) {
+  $OutputDmg = Join-Path $ReleaseDir "TourMasterMac.dmg"
 }
 
-$ReleaseDir = Split-Path $OutputZip -Parent
 New-Item -ItemType Directory -Path $ReleaseDir -Force | Out-Null
+
+Write-Host "Staging embedded Node.js for macOS..."
+& (Join-Path $Root "packaging\scripts\stage-runtime.ps1") -DownloadNode -SkipIfPresent -Platform mac
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 if (-not $SkipBuild) {
   Write-Host "Building production bundle..."
@@ -47,7 +51,8 @@ $copyItems = @(
   @{ Source = "migrations"; Dest = "migrations"; Recurse = $true },
   @{ Source = "packaging\start.command"; Dest = "start.command"; Recurse = $false },
   @{ Source = "packaging\local-server-package.json"; Dest = "package.json"; Recurse = $false },
-  @{ Source = "packaging\README-mac.txt"; Dest = "README-mac.txt"; Recurse = $false }
+  @{ Source = "packaging\README-mac.txt"; Dest = "README-mac.txt"; Recurse = $false },
+  @{ Source = "packaging\scripts\resolve-node-mac.sh"; Dest = "scripts\resolve-node-mac.sh"; Recurse = $false }
 )
 
 foreach ($item in $copyItems) {
@@ -60,7 +65,20 @@ foreach ($item in $copyItems) {
   if ($item.Recurse) {
     Copy-Item -Recurse $sourcePath $destPath
   } else {
+    $destParent = Split-Path $destPath -Parent
+    if ($destParent -and -not (Test-Path $destParent)) {
+      New-Item -ItemType Directory -Path $destParent -Force | Out-Null
+    }
     Copy-Item $sourcePath $destPath
+  }
+}
+
+$runtimeDest = Join-Path $buildStagingDir "runtime"
+New-Item -ItemType Directory -Path $runtimeDest -Force | Out-Null
+foreach ($macArch in @("mac-arm64", "mac-x64")) {
+  $macSrc = Join-Path $Root "packaging\runtime\$macArch"
+  if (Test-Path $macSrc) {
+    Copy-Item -Recurse $macSrc (Join-Path $runtimeDest $macArch)
   }
 }
 
@@ -73,6 +91,11 @@ if ($LASTEXITCODE -ne 0) {
   throw "npm install failed in staging directory."
 }
 Pop-Location
+
+Write-Host ""
+Write-Host "Verifying embedded Node.js in staging..."
+& (Join-Path $Root "packaging\scripts\verify-runtime-mac.ps1") -InstallDir $buildStagingDir
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 function Publish-StagingDirectory {
   param(
@@ -113,6 +136,11 @@ New-Item -ItemType Directory -Path $resourcesDir -Force | Out-Null
 Copy-Item -Recurse (Join-Path $StagingDir "*") $resourcesDir
 Copy-Item (Join-Path $Root "packaging\mac\Info.plist") (Join-Path $appBuildTmp "Contents\Info.plist")
 
+$iconSrc = Join-Path $Root "public\logo.png"
+if (Test-Path $iconSrc) {
+  Copy-Item $iconSrc (Join-Path $appBuildTmp "Contents\Resources\AppIcon.png")
+}
+
 $launcherSrc = Join-Path $Root "packaging\mac\TournamentMaster.launcher"
 $launcherDest = Join-Path $macOsDir "TournamentMaster"
 Copy-Item $launcherSrc $launcherDest
@@ -120,7 +148,8 @@ Copy-Item $launcherSrc $launcherDest
 # Unix line endings for macOS scripts
 foreach ($scriptPath in @(
   $launcherDest,
-  (Join-Path $resourcesDir "start.command")
+  (Join-Path $resourcesDir "start.command"),
+  (Join-Path $resourcesDir "scripts\resolve-node-mac.sh")
 )) {
   if (Test-Path $scriptPath) {
     $text = [IO.File]::ReadAllText($scriptPath) -replace "`r`n", "`n" -replace "`r", "`n"
@@ -135,21 +164,19 @@ Rename-Item -Path $appBuildTmp -NewName (Split-Path $AppBundlePath -Leaf)
 
 Write-Host "App bundle ready: $AppBundlePath"
 
-if (Test-Path $OutputZip) {
-  Remove-Item $OutputZip -Force -ErrorAction SilentlyContinue
+Write-Host ""
+Write-Host "Building macOS DMG installer via VPS..."
+$dmgScript = Join-Path $Root "packaging\mac\build-dmg-vps.ps1"
+& powershell -NoProfile -ExecutionPolicy Bypass -File $dmgScript -Root $Root -AppBundlePath $AppBundlePath -OutputDmg $OutputDmg
+if ($LASTEXITCODE -ne 0) {
+  throw "DMG build failed."
 }
 
 Write-Host ""
-Write-Host "Creating macOS zip: $OutputZip"
-Compress-Archive -Path $AppBundlePath -DestinationPath $OutputZip -CompressionLevel Optimal -Force
-
-Write-Host ""
-Write-Host "Done. End-user macOS packages:"
-Write-Host "  App:  $AppBundlePath"
-Write-Host "  Zip:  $OutputZip"
+Write-Host "Done. End-user macOS installer:"
+Write-Host "  DMG:  $OutputDmg"
 Write-Host ""
 Write-Host "On macOS:"
-Write-Host "  1. Extract TourMasterMac.zip (contains Tournament Master.app)"
+Write-Host "  1. Open TourMasterMac.dmg from release\installer"
 Write-Host "  2. Drag Tournament Master.app to Applications"
 Write-Host "  3. First launch: right-click app -> Open (Gatekeeper)"
-Write-Host "  4. Or run packaging/mac/build-dmg.sh on a Mac to create TourMasterMac.dmg"

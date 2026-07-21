@@ -14,6 +14,11 @@ machine.json
 db.json
 release/
 
+# Bundled runtimes (downloaded during npm run stage:runtime)
+packaging/runtime/node.exe
+packaging/runtime/mac-arm64/
+packaging/runtime/mac-x64/
+
 # Accidental local artifacts
 /npm
 /tsx

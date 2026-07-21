@@ -12,11 +12,13 @@ import { useTrackingI18n } from "../tracking/useTrackingI18n";
 import { areTrackingPlayersEqual } from "../tracking/playerListUtils";
 import { isTrackingEliminatedPlayer } from "../tracking/playerStatus";
 import { TRACKING_PLAYERS_POLL_MS } from "../tracking/trackingPollConfig";
+import { useRuntimeTuningPollMs } from "../systemHealth/useRuntimeTuning";
 
 type ConnectionState = "checking" | "connected" | "error";
 
 export default function TrackingView() {
   const { locale, t } = useTrackingI18n();
+  const playersPollMs = useRuntimeTuningPollMs("trackingPollMs", TRACKING_PLAYERS_POLL_MS);
   const [connectionState, setConnectionState] = useState<ConnectionState>("checking");
   const [players, setPlayers] = useState<TrackingPlayerSearchItem[]>([]);
   const [tournamentName, setTournamentName] = useState("Tournament");
@@ -92,12 +94,12 @@ export default function TrackingView() {
 
     const pollTimer = window.setInterval(() => {
       void loadPlayers(true);
-    }, TRACKING_PLAYERS_POLL_MS);
+    }, playersPollMs);
 
     return () => {
       window.clearInterval(pollTimer);
     };
-  }, [connectionState, selectedPlayer, loadPlayers]);
+  }, [connectionState, selectedPlayer, loadPlayers, playersPollMs]);
 
   const selectedPlayerId = useMemo(() => selectedPlayer?.id ?? null, [selectedPlayer]);
 

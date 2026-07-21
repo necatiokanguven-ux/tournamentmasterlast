@@ -27,4 +27,4 @@ if (-not $WindowsOnly) {
 }
 
 Write-Host ""
-Write-Host "All packages ready under release\"
+Write-Host "All packages ready under release\installer\"

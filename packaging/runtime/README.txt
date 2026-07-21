@@ -3,7 +3,9 @@ Tournament Master — Embedded Runtime (Phase 11b)
 Place optional bundled binaries here before building the customer zip/installer:
 
   runtime/
-    node.exe          Node.js 18+ (required for F11b customer builds)
+    node.exe          Node.js 20+ Windows (required for customer builds)
+    mac-arm64/node    Node.js 20+ Apple Silicon (macOS .app / DMG)
+    mac-x64/node      Node.js 20+ Intel Mac (macOS .app / DMG)
     postgres/         Portable PostgreSQL 15+ Windows binaries
       bin/
         pg_ctl.exe
@@ -27,8 +29,8 @@ Data directory (installer):     %ProgramData%\TournamentMaster\data\
 
 Do NOT commit PostgreSQL/Redis binaries to git — the installer pipeline copies them here.
 
-Build installer staging:
-  npm run build:installer
+Build customer packages (embedded Node, outputs in release/installer/):
+  npm run build:packages
 
-Compile TourMasterSetup.exe (requires Inno Setup 6):
-  packaging\installer\build-installer.ps1
+Stage embedded Node only:
+  npm run stage:runtime

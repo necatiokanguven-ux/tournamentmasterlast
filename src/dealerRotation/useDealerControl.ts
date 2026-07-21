@@ -6,6 +6,8 @@ import type { DealerRotationData } from "../server/dealerRotation/types";
 import { useTournamentSocket } from "../websocket/useTournamentSocket";
 import { isChannelPayloadMessage, type TournamentSocketServerMessage } from "../websocket/tournamentSocketTypes";
 
+import { useRuntimeTuningPollMs } from "../systemHealth/useRuntimeTuning";
+
 type DealerControlChannelPayload = {
   rotation: DealerRotationData;
   tables: DealerTableState[];
@@ -79,6 +81,8 @@ function dealerControlChannelForZone(zoneId: string | null): string {
 }
 
 export function useDealerControl(pollMs = 4000) {
+  const tuningPollMs = useRuntimeTuningPollMs("dealerControlPollMs", pollMs);
+  const basePollMs = Math.max(pollMs, tuningPollMs);
   const [state, setState] = useState<DealerControlState>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -117,9 +121,9 @@ export function useDealerControl(pollMs = 4000) {
   });
 
   const effectivePollMs = useMemo(() => {
-    if (!wsEnabled) return pollMs;
-    return wsConnected ? WS_FALLBACK_POLL_MS : pollMs;
-  }, [pollMs, wsConnected, wsEnabled]);
+    if (!wsEnabled) return basePollMs;
+    return wsConnected ? Math.max(WS_FALLBACK_POLL_MS, basePollMs) : basePollMs;
+  }, [basePollMs, wsConnected, wsEnabled]);
 
   const refresh = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);

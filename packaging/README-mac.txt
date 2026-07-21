@@ -14,15 +14,15 @@ Requirements
 ------------
 
 - macOS 12 or newer
-- Node.js 18 or newer (https://nodejs.org/)
+- No separate Node.js install required (embedded in the app)
 
 
 Quick start
 
 -----------
 
-1. Extract TourMasterMac.zip to a folder on your tournament Mac
-2. Drag **Tournament Master.app** to Applications (or double-click from the zip folder)
+1. Open TourMasterMac.dmg from pokerclup.com/downloads (or release/installer after build)
+2. Drag **Tournament Master.app** to Applications
    - First time: right-click the app and choose **Open** (macOS Gatekeeper)
    - Alternative: double-click **start.command** in the app bundle (Terminal mode)
 3. Wait — your browser opens http://localhost:3000 automatically (InPrivate/Incognito when supported)

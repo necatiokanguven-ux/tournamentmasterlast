@@ -7,8 +7,9 @@ import { useMobileI18n, formatMobileTime } from "../mobile/translations";
 import ConnectionStatus from "../mobile/ConnectionStatus";
 import { useTournamentSocket } from "../websocket/useTournamentSocket";
 import { isChannelPayloadMessage, type TournamentSocketServerMessage } from "../websocket/tournamentSocketTypes";
+import { useRuntimeTuningPollMs } from "../systemHealth/useRuntimeTuning";
 
-const POLL_INTERVAL_MS = 1000;
+const DEFAULT_POLL_INTERVAL_MS = 1000;
 const WS_FALLBACK_POLL_MS = 15_000;
 const DEVICE_NAME_KEY = "tm-floor-device-name";
 const ALERTS_ENABLED_KEY = "tm-floor-alerts-enabled";
@@ -72,6 +73,7 @@ export default function FloorView() {
 
   const teamId = getTeamIdFromQuery();
   const wsEnabled = isWsEnabled();
+  const tuningPollMs = useRuntimeTuningPollMs("floorPollMs", DEFAULT_POLL_INTERVAL_MS);
   const floorChannel = teamId ? `floor:${teamId}` : null;
   const [teamName, setTeamName] = useState("Floor");
   const [calls, setCalls] = useState<FloorCall[]>([]);
@@ -261,9 +263,9 @@ export default function FloorView() {
   }, [teamId]);
 
   const pollIntervalMs = useMemo(() => {
-    if (!wsEnabled) return POLL_INTERVAL_MS;
-    return wsConnected ? WS_FALLBACK_POLL_MS : POLL_INTERVAL_MS;
-  }, [wsConnected, wsEnabled]);
+    if (!wsEnabled) return tuningPollMs;
+    return wsConnected ? Math.max(WS_FALLBACK_POLL_MS, tuningPollMs) : tuningPollMs;
+  }, [wsConnected, wsEnabled, tuningPollMs]);
 
   useEffect(() => {
     if (!teamId) return;

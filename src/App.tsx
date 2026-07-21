@@ -20,9 +20,11 @@ import { tournamentStore } from "./store";
 import { isWsEnabled } from "./config/featureFlags";
 import { useTournamentSocket } from "./websocket/useTournamentSocket";
 import { isClockChannelPayload } from "./websocket/clockChannelTypes";
-import { Timer, Settings, Users, Grid, FileText, ChevronLeft, ChevronRight, Monitor, KeyRound, Lock, UserCog } from "lucide-react";
+import SystemHealthView from "./components/SystemHealthView";
+import { useSystemHealthNavStatus, toneClass, statusBadgeClass } from "./systemHealth/useSystemHealthNavStatus";
+import { Timer, Settings, Users, Grid, FileText, ChevronLeft, ChevronRight, Monitor, KeyRound, Lock, UserCog, Shield } from "lucide-react";
 
-type AppTab = "clock" | "license" | "settings" | "players" | "tables" | "dealer-control" | "reports" | "display";
+type AppTab = "clock" | "license" | "settings" | "players" | "tables" | "dealer-control" | "reports" | "display" | "system-health";
 
 export default function App() {
   const { isLicensed, loading: licenseLoading, status: licenseStatus } = useLicenseStatus();
@@ -79,6 +81,10 @@ export default function App() {
   useEffect(() => {
     if (!licenseLoading && !isLicensed) {
       setActiveTab("license");
+      return;
+    }
+    if (isLicensed && window.location.hash === "#system-health") {
+      setActiveTab("system-health");
     }
   }, [licenseLoading, isLicensed]);
 
@@ -102,6 +108,7 @@ export default function App() {
   };
 
   const licenseNavStatus = getLicenseNavStatus(licenseLoading, isLicensed, licenseStatus);
+  const systemHealthNav = useSystemHealthNavStatus(isLicensed && !licenseLoading);
 
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden font-sans flex-col">
@@ -157,18 +164,21 @@ export default function App() {
               { id: "players", label: "Player Management", icon: Users, color: "text-blue-500" },
               { id: "settings", label: "Tournament Setup", icon: Settings, color: "text-amber-500" },
               { id: "dealer-control", label: "Dealer Control", icon: UserCog, color: "text-orange-500" },
+              { id: "system-health", label: "System Health Auto Protection", icon: Shield, color: "text-emerald-400", healthNav: true },
               { id: "reports", label: "Tournament Reports", icon: FileText, color: "text-purple-500" }
             ].map((nav) => {
               const Icon = nav.icon;
               const active = activeTab === nav.id;
               const locked = !isLicensed && nav.id !== "license";
               const isLicenseNav = nav.id === "license";
+              const isHealthNav = Boolean((nav as { healthNav?: boolean }).healthNav);
               const statusToneClass =
                 licenseNavStatus.tone === "active"
                   ? "text-emerald-400"
                   : licenseNavStatus.tone === "inactive"
                     ? "text-red-400"
                     : "text-zinc-500";
+              const healthToneClass = toneClass(systemHealthNav.tone);
 
               return (
                 <button
@@ -176,7 +186,7 @@ export default function App() {
                   onClick={() => handleTabSelect(nav.id as AppTab)}
                   disabled={licenseLoading}
                   className={`w-full rounded-xl text-xs font-black uppercase tracking-wider transition-all ${
-                    isLicenseNav ? "px-3 py-2" : "flex items-center gap-3 px-3 py-2.5"
+                    isLicenseNav || isHealthNav ? "px-3 py-2" : "flex items-center gap-3 px-3 py-2.5"
                   } ${
                     active
                       ? "bg-gradient-to-r from-zinc-800 to-zinc-900/40 border border-zinc-800 text-zinc-100 font-extrabold shadow-sm"
@@ -186,7 +196,9 @@ export default function App() {
                   }`}
                   title={
                     isNavCollapsed
-                      ? `${nav.label} — ${licenseNavStatus.primary}${licenseNavStatus.secondary ? ` (${licenseNavStatus.secondary})` : ""}`
+                      ? isHealthNav
+                        ? `${nav.label} — ${systemHealthNav.primary}`
+                        : `${nav.label} — ${licenseNavStatus.primary}${licenseNavStatus.secondary ? ` (${licenseNavStatus.secondary})` : ""}`
                       : locked
                         ? "Activate a license key first"
                         : nav.label
@@ -211,6 +223,31 @@ export default function App() {
                       ) : (
                         <span className={`text-[8px] font-bold leading-none ${statusToneClass}`}>
                           {licenseNavStatus.tone === "active" ? "ON" : licenseNavStatus.tone === "inactive" ? "OFF" : "…"}
+                        </span>
+                      )}
+                    </div>
+                  ) : isHealthNav ? (
+                    <div className={`flex ${isNavCollapsed ? "flex-col items-center gap-1" : "items-start gap-3"} w-full`}>
+                      <div className="relative shrink-0">
+                        <Icon className={`w-4 h-4 ${nav.color}`} />
+                        <span className={`absolute -top-1 -right-1 h-2 w-2 rounded-full ${statusBadgeClass(systemHealthNav.status)}`} />
+                      </div>
+                      {!isNavCollapsed ? (
+                        <div className="min-w-0 flex-1 text-left normal-case tracking-normal">
+                          <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-inherit">
+                            <span>{nav.label}</span>
+                            {locked && <Lock className="w-3 h-3 text-zinc-600" />}
+                          </div>
+                          <p className={`mt-1 text-[10px] font-bold leading-tight ${healthToneClass}`}>
+                            {systemHealthNav.primary}
+                            {systemHealthNav.secondary ? (
+                              <span className="text-zinc-500 font-semibold normal-case"> · {systemHealthNav.secondary}</span>
+                            ) : null}
+                          </p>
+                        </div>
+                      ) : (
+                        <span className={`text-[8px] font-bold leading-none ${healthToneClass}`}>
+                          {systemHealthNav.status === "green" ? "OK" : systemHealthNav.status === "red" ? "!" : "!"}
                         </span>
                       )}
                     </div>
@@ -263,6 +300,7 @@ export default function App() {
         {dataReady && activeTab === "players" && isLicensed && <PlayersView />}
         {dataReady && activeTab === "tables" && isLicensed && <TablesView />}
         {dataReady && activeTab === "dealer-control" && isLicensed && <DealerControlView />}
+        {dataReady && activeTab === "system-health" && isLicensed && <SystemHealthView />}
         {dataReady && activeTab === "reports" && isLicensed && <ReportsView />}
         {!licenseLoading && !isLicensed && activeTab !== "license" && <LicenseView />}
       </main>

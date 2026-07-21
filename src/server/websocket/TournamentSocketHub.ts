@@ -216,6 +216,36 @@ export class TournamentSocketHub {
     return this.wss.clients.size;
   }
 
+  getChannelClientCounts(): {
+    dealerPhone: number;
+    floor: number;
+    dealerControl: number;
+    dealerTimer: number;
+    total: number;
+  } {
+    let dealerPhone = 0;
+    let floor = 0;
+    let dealerControl = 0;
+    let dealerTimer = 0;
+
+    for (const meta of this.socketMeta.values()) {
+      for (const channel of meta.channels) {
+        if (channel.startsWith("dealer-phone:")) dealerPhone += 1;
+        else if (channel.startsWith("floor:")) floor += 1;
+        else if (channel.startsWith("dealer-control")) dealerControl += 1;
+        else if (channel.startsWith("dealer-timer:")) dealerTimer += 1;
+      }
+    }
+
+    return {
+      dealerPhone,
+      floor,
+      dealerControl,
+      dealerTimer,
+      total: this.wss.clients.size,
+    };
+  }
+
   close(): void {
     for (const client of this.wss.clients) {
       client.close(1001, "Server shutting down");

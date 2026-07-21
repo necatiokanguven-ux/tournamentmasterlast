@@ -14,15 +14,15 @@ Requirements
 ------------
 
 - Windows 10/11
-- Node.js 18 or newer (https://nodejs.org/)
+- No separate Node.js install required (embedded in the installer)
 
 
 Quick start
 
 -----------
 
-1. Extract TourMasterWin.zip to a folder on your tournament PC
-2. Double-click start.bat
+1. Run TourMasterSetup.exe from pokerclup.com/downloads (or release/installer after build)
+2. Launch Tournament Master from the desktop shortcut or Start menu
 3. Wait — your browser opens http://localhost:3000 automatically
 4. Sign in to PokerClup and choose trial, 30-day, or annual license
 

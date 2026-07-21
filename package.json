@@ -19,9 +19,11 @@
     "build:package:win": "powershell -NoProfile -ExecutionPolicy Bypass -File packaging/installer/build-installer.ps1",
     "build:package:mac": "powershell -NoProfile -ExecutionPolicy Bypass -File packaging/build-package-mac.ps1",
     "build:package:mac:dmg": "bash packaging/mac/build-dmg.sh",
+    "build:package:mac:dmg:vps": "powershell -NoProfile -ExecutionPolicy Bypass -File packaging/mac/build-dmg-vps.ps1",
     "vps:id-scan": "npm --prefix vps/id-scan run start",
     "vps:id-scan:dev": "npm --prefix vps/id-scan run dev",
     "build:packages": "powershell -NoProfile -ExecutionPolicy Bypass -File packaging/build-packages.ps1",
+    "test:system-health": "packaging\\test-system-health.bat",
     "build:installer": "powershell -NoProfile -ExecutionPolicy Bypass -File packaging/installer/build-installer.ps1",
     "build:installer:full": "powershell -NoProfile -ExecutionPolicy Bypass -File packaging/installer/build-installer.ps1 -TryInstallInno",
     "install:inno": "powershell -NoProfile -ExecutionPolicy Bypass -File packaging/installer/install-inno-setup.ps1"

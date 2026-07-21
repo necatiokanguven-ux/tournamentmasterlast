@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { localApi } from "../config/api";
+import { useRuntimeTuningPollMs } from "../systemHealth/useRuntimeTuning";
 import { isWsEnabled } from "../config/featureFlags";
 import { getDealerPhoneAction, type DealerPhoneAction } from "./dealerPhoneActions";
 import { ensureDealerPhoneSession } from "./dealerSession";
@@ -44,6 +45,8 @@ const EMPTY: DealerPhoneActionState = {
 const WS_FALLBACK_POLL_MS = 15_000;
 
 export function useDealerPhoneAction(dealerId: string | null, pollMs = 1000): DealerPhoneActionState {
+  const tuningPollMs = useRuntimeTuningPollMs("dealerPhonePollMs", pollMs);
+  const basePollMs = Math.max(pollMs, tuningPollMs);
   const [state, setState] = useState<DealerPhoneActionState>(EMPTY);
   const wsEnabled = isWsEnabled();
   const channel = dealerId ? `dealer-phone:${dealerId}` : null;
@@ -131,9 +134,9 @@ export function useDealerPhoneAction(dealerId: string | null, pollMs = 1000): De
   }, [dealerId]);
 
   const effectivePollMs = useMemo(() => {
-    if (!wsEnabled) return pollMs;
-    return wsConnected ? WS_FALLBACK_POLL_MS : pollMs;
-  }, [pollMs, wsConnected, wsEnabled]);
+    if (!wsEnabled) return basePollMs;
+    return wsConnected ? Math.max(WS_FALLBACK_POLL_MS, basePollMs) : basePollMs;
+  }, [basePollMs, wsConnected, wsEnabled]);
 
   useEffect(() => {
     void refresh();

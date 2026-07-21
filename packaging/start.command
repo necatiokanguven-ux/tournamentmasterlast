@@ -1,8 +1,10 @@
 #!/bin/bash
 cd "$(dirname "$0")"
 
-if ! command -v node >/dev/null 2>&1; then
-  echo "Node.js is required. Install from https://nodejs.org/"
+. "$(dirname "$0")/scripts/resolve-node-mac.sh"
+NODE_BIN="$(resolve_mac_node "$(dirname "$0")")"
+if [ -z "$NODE_BIN" ]; then
+  echo "Server runtime is missing. Re-install TourMasterMac.dmg."
   read -r -p "Press Enter to close..."
   exit 1
 fi
@@ -28,7 +30,7 @@ if [ ! -d "node_modules" ]; then
 fi
 
 if [ ! -f "dist/server.cjs" ]; then
-  echo "ERROR: dist/server.cjs is missing. Re-download TourMasterMac.zip from pokerclup.com/downloads"
+  echo "ERROR: dist/server.cjs is missing. Re-install TourMasterMac.dmg."
   read -r -p "Press Enter to close..."
   exit 1
 fi
@@ -42,13 +44,13 @@ echo "When ready, your browser will open http://localhost:3000 automatically."
 echo "Keep this window open during the tournament."
 echo ""
 
-node dist/server.cjs
+"$NODE_BIN" dist/server.cjs
 EXIT_CODE=$?
 
 echo ""
 if [ "$EXIT_CODE" -ne 0 ]; then
   echo "Server stopped with an error. See the message above."
-  echo "If the problem continues, re-download TourMasterMac.zip from pokerclup.com/downloads"
+  echo "If the problem continues, re-install TourMasterMac.dmg."
 else
   echo "Server stopped."
 fi

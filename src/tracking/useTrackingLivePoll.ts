@@ -2,8 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { localApi } from "../config/api";
 import { mergeTrackingLiveState, type TrackingLiveState } from "./liveState";
 import { TRACKING_LIVE_POLL_MS } from "./trackingPollConfig";
+import { useRuntimeTuningPollMs } from "../systemHealth/useRuntimeTuning";
 
 export function useTrackingLivePoll(enabled: boolean) {
+  const tuningPollMs = useRuntimeTuningPollMs("trackingPollMs", TRACKING_LIVE_POLL_MS);
   const [liveState, setLiveState] = useState<TrackingLiveState | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,12 +41,12 @@ export function useTrackingLivePoll(enabled: boolean) {
     void fetchLiveState();
     const pollTimer = window.setInterval(() => {
       void fetchLiveState();
-    }, TRACKING_LIVE_POLL_MS);
+    }, tuningPollMs);
 
     return () => {
       window.clearInterval(pollTimer);
     };
-  }, [enabled, fetchLiveState]);
+  }, [enabled, fetchLiveState, tuningPollMs]);
 
   return { liveState, error, refresh: fetchLiveState };
 }

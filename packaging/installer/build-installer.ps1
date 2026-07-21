@@ -14,6 +14,10 @@ if (-not $StagingDir) {
 $ReleaseDir = Join-Path $Root "release\installer"
 New-Item -ItemType Directory -Path $ReleaseDir -Force | Out-Null
 
+Write-Host "Staging embedded Node.js for Windows..."
+& (Join-Path $Root "packaging\scripts\stage-runtime.ps1") -DownloadNode -SkipIfPresent -Platform win
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 if (-not $SkipBuild) {
   Write-Host "Building production bundle..."
   Push-Location $Root
@@ -44,8 +48,7 @@ $copyItems = @(
   @{ Source = "packaging\local-server-package.json"; Dest = "package.json"; Recurse = $false },
   @{ Source = "packaging\README-win.txt"; Dest = "README-win.txt"; Recurse = $false },
   @{ Source = "packaging\scripts"; Dest = "scripts"; Recurse = $true },
-  @{ Source = "packaging\launcher"; Dest = "launcher"; Recurse = $true },
-  @{ Source = "packaging\runtime"; Dest = "runtime"; Recurse = $true }
+  @{ Source = "packaging\launcher"; Dest = "launcher"; Recurse = $true }
 )
 
 foreach ($item in $copyItems) {
@@ -59,6 +62,19 @@ foreach ($item in $copyItems) {
     Copy-Item -Recurse $sourcePath $destPath
   } else {
     Copy-Item $sourcePath $destPath
+  }
+}
+
+$runtimeDest = Join-Path $activeStagingDir "runtime"
+New-Item -ItemType Directory -Path $runtimeDest -Force | Out-Null
+$winNode = Join-Path $Root "packaging\runtime\node.exe"
+if (Test-Path $winNode) {
+  Copy-Item $winNode (Join-Path $runtimeDest "node.exe") -Force
+}
+foreach ($optionalDir in @("postgres", "redis")) {
+  $optionalSrc = Join-Path $Root "packaging\runtime\$optionalDir"
+  if (Test-Path $optionalSrc) {
+    Copy-Item -Recurse $optionalSrc (Join-Path $runtimeDest $optionalDir)
   }
 }
 
@@ -88,17 +104,9 @@ if (Test-Path $logoExeIco) {
 }
 
 Write-Host ""
-Write-Host "Verifying runtime layout (optional binaries)..."
-& (Join-Path $Root "packaging\scripts\verify-runtime.ps1") -InstallDir $activeStagingDir
-if ($LASTEXITCODE -ne 0) {
-  Write-Host "Runtime verification failed - customer build may still work with db.json only."
-}
-
-$portableZip = Join-Path $ReleaseDir "TourMasterWin.zip"
-$legacyPortableZip = Join-Path $ReleaseDir "TourMasterSetup-portable.zip"
-if (Test-Path $portableZip) {
-  Remove-Item $portableZip -Force -ErrorAction SilentlyContinue
-}
+Write-Host "Verifying embedded Node.js in staging..."
+& (Join-Path $Root "packaging\scripts\verify-runtime.ps1") -InstallDir $activeStagingDir -RequireNode
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 function Publish-StagingDirectory {
   param(
@@ -127,24 +135,6 @@ $StagingDir = Publish-StagingDirectory -TargetDir $StagingDir -SourceDir $active
 
 Write-Host ""
 Write-Host "Staging ready: $StagingDir"
-
-Write-Host ""
-Write-Host "Creating Windows zip: $portableZip"
-try {
-  if (Test-Path $portableZip) {
-    Remove-Item $portableZip -Force -ErrorAction SilentlyContinue
-  }
-  if (Test-Path $legacyPortableZip) {
-    Remove-Item $legacyPortableZip -Force -ErrorAction SilentlyContinue
-  }
-  Compress-Archive -Path (Join-Path $StagingDir "*") -DestinationPath $portableZip -CompressionLevel Optimal -Force
-  Copy-Item $portableZip $legacyPortableZip -Force
-} catch {
-  Write-Host "WARNING: Portable zip skipped (files in use): $($_.Exception.Message)"
-}
-
-Write-Host "Windows zip: $portableZip"
-Write-Host "Legacy alias: $legacyPortableZip"
 
 function Find-IsccPath {
   $candidates = @(
