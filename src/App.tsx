@@ -24,6 +24,7 @@ import SystemHealthView from "./components/SystemHealthView";
 import ServerStatusNav from "./components/ServerStatusNav";
 import { useLocalServerStatus } from "./hooks/useLocalServerStatus";
 import { useAppUpdate } from "./hooks/useAppUpdate";
+import { useAppVersion } from "./hooks/useAppVersion";
 import UpdateAvailableModal from "./components/UpdateAvailableModal";
 import { useSystemHealthNavStatus, toneClass, statusBadgeClass, healthNavStatusClass } from "./systemHealth/useSystemHealthNavStatus";
 import { Timer, Settings, Users, Grid, FileText, ChevronLeft, ChevronRight, Monitor, KeyRound, Lock, UserCog, Shield } from "lucide-react";
@@ -115,6 +116,7 @@ export default function App() {
   const systemHealthNav = useSystemHealthNavStatus(isLicensed && !licenseLoading);
   const serverStatus = useLocalServerStatus();
   const appUpdate = useAppUpdate();
+  const appVersion = useAppVersion();
 
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden font-sans flex-col">
@@ -293,7 +295,15 @@ export default function App() {
         {/* Footer info inside nav */}
         {!isNavCollapsed && (
           <div className="p-4 border-t border-zinc-800/60 text-[9px] font-mono text-zinc-500 text-center">
-            Tournament Director v4.1 • Live
+            {appVersion.version ? (
+              <>
+                Tournament Master v{appVersion.version}
+                <span className="text-zinc-600"> · </span>
+                Live
+              </>
+            ) : (
+              <>Tournament Director · Live</>
+            )}
           </div>
         )}
       </aside>

@@ -1,18 +1,7 @@
 import type { LocalLicenseStatus } from "./config";
+import { getLicenseDaysRemaining } from "../shared/licenseExpiry";
 
-export function getLicenseDaysRemaining(expiresAt?: string | null): number | null {
-  if (!expiresAt) {
-    return null;
-  }
-
-  const expires = new Date(expiresAt);
-  if (Number.isNaN(expires.getTime())) {
-    return null;
-  }
-
-  const diffMs = expires.getTime() - Date.now();
-  return Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
-}
+export { getLicenseDaysRemaining, formatLicenseExpiry } from "../shared/licenseExpiry";
 
 export type LicenseNavStatus = {
   primary: string;

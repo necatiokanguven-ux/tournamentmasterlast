@@ -20,4 +20,7 @@ export type LocalLicenseStatus = {
   message: string;
   type?: string;
   expiresAt?: string | null;
+  daysRemaining?: number | null;
+  licenseFilePath?: string | null;
+  dataDirectory?: string | null;
 };

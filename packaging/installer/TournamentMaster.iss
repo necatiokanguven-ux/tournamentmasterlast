@@ -2,7 +2,7 @@
 ; Build: packaging\installer\build-installer.ps1
 
 #ifndef AppVersion
-#define AppVersion "1.0.9"
+#define AppVersion "1.0.10"
 #endif
 
 #define AppName "Tournament Master"
@@ -23,7 +23,7 @@ UsePreviousAppDir=yes
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir=..\..\release\installer
-OutputBaseFilename=TourMasterSetup
+OutputBaseFilename=TourMasterSetup_{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -46,6 +46,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Dirs]
 Name: "{app}\Updates"; Permissions: users-modify; Flags: uninsneveruninstall
 Name: "{app}\data"; Permissions: users-modify; Flags: uninsneveruninstall
+Name: "{app}\data\config"; Permissions: users-modify; Flags: uninsneveruninstall
 
 [Files]
 Source: "..\..\release\TourMasterSetup-staging\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "data\*,Updates\*,Updates\*"
@@ -71,7 +72,23 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   MarkerPath: String;
+  DataRoot: String;
+  LicensePath: String;
 begin
+  if CurStep = ssInstall then
+  begin
+    DataRoot := ExpandConstant('{app}\data');
+    LicensePath := DataRoot + '\config\license.json';
+    if FileExists(LicensePath) then
+    begin
+      Log('Preserving existing license at: ' + LicensePath);
+    end;
+    if DirExists(DataRoot) then
+    begin
+      Log('Preserving tournament data at: ' + DataRoot);
+    end;
+  end;
+
   if CurStep = ssPostInstall then
   begin
     MarkerPath := ExpandConstant('{app}\.installed');

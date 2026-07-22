@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { KeyRound, ShieldCheck, ShieldAlert, Loader2 } from "lucide-react";
+import { KeyRound, ShieldCheck, ShieldAlert, Loader2, CalendarDays, HardDrive } from "lucide-react";
 import { isCloudHostedApp } from "../config/api";
 import type { LocalLicenseStatus } from "../license/config";
 import { activateLicenseKey, claimPaidLicenseForMachine, fetchLicenseStatus } from "../license/licenseClient";
+import { formatLicenseExpiry } from "../license/licenseDisplay";
 import LicenseUpgradeButtons from "./LicenseUpgradeButtons";
 import { getActiveVenuePackageId, getVenuePackageTier } from "../dealerRotation/venuePackageTiers";
+import { useAppVersion } from "../hooks/useAppVersion";
 
 type LicenseSettingsProps = {
   variant?: "embedded" | "page";
@@ -18,6 +20,8 @@ export default function LicenseSettings({ variant = "embedded" }: LicenseSetting
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isCloudApp = isCloudHostedApp();
+  const appVersion = useAppVersion();
+  const expiryInfo = formatLicenseExpiry(status?.expiresAt);
 
   const loadStatus = async () => {
     setLoading(true);
@@ -130,11 +134,38 @@ export default function LicenseSettings({ variant = "embedded" }: LicenseSetting
                 </p>
                 <p className="text-zinc-400 text-xs mt-1">{status.message}</p>
                 {status.type && (
-                  <p className="text-zinc-500 text-xs mt-1">
-                    Type: {status.type}
-                    {status.expiresAt ? ` · Expires: ${new Date(status.expiresAt).toLocaleDateString()}` : ""}
-                  </p>
+                  <p className="text-zinc-500 text-xs mt-1">Type: {status.type}</p>
                 )}
+                {expiryInfo ? (
+                  <div className="mt-3 inline-flex flex-wrap items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-xs text-zinc-300">
+                    <CalendarDays className="h-3.5 w-3.5 text-amber-400" />
+                    <span>
+                      Expires: <strong className="text-zinc-100">{expiryInfo.dateLabel}</strong>
+                    </span>
+                    <span className="text-zinc-600" aria-hidden="true">
+                      ·
+                    </span>
+                    <span className="font-semibold text-amber-300">{expiryInfo.daysLabel}</span>
+                  </div>
+                ) : null}
+                {!isCloudApp && status.licenseFilePath ? (
+                  <div className="mt-3 rounded-xl border border-zinc-800 bg-zinc-950/50 px-3 py-2 text-[11px] text-zinc-500">
+                    <div className="mb-1 flex items-center gap-1.5 font-bold uppercase tracking-wider text-zinc-400">
+                      <HardDrive className="h-3.5 w-3.5" />
+                      License storage
+                    </div>
+                    <p className="font-mono break-all text-zinc-400">{status.licenseFilePath}</p>
+                    {status.dataDirectory ? (
+                      <p className="mt-1">
+                        Tournament data folder:{" "}
+                        <span className="font-mono text-zinc-400">{status.dataDirectory}</span>
+                      </p>
+                    ) : null}
+                    <p className="mt-1 leading-relaxed">
+                      Updates never overwrite this folder. Keep backups before major changes.
+                    </p>
+                  </div>
+                ) : null}
                 {status.machineId && (
                   <p className="text-zinc-600 text-[11px] font-mono mt-1 break-all">
                     Machine: {status.machineId}
@@ -186,6 +217,13 @@ export default function LicenseSettings({ variant = "embedded" }: LicenseSetting
           </div>
 
           <LicenseUpgradeButtons machineId={status?.machineId} />
+
+          {variant === "page" && appVersion.version ? (
+            <p className="mt-6 text-[11px] font-mono text-zinc-600">
+              Tournament Master v{appVersion.version}
+              {appVersion.build ? ` · build ${appVersion.build}` : ""}
+            </p>
+          ) : null}
         </>
       )}
     </div>

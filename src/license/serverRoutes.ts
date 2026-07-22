@@ -1,10 +1,14 @@
 import type { Express, Request, Response, NextFunction } from "express";
+import path from "path";
 import { licenseManager } from "./LicenseManager";
 import {
   activateLicenseOnMachine,
   getOrCreateMachineRecord,
+  resolveLicenseConfigDir,
+  resolveLicenseFilePath,
   saveLicenseRecord,
 } from "./licenseCore";
+import { getLicenseDaysRemaining } from "../shared/licenseExpiry";
 
 export type { ResolvedLicenseStatus } from "./licenseCore";
 export { getOrCreateMachineRecord } from "./licenseCore";
@@ -37,7 +41,12 @@ export function registerLicenseRoutes(app: Express) {
 
   app.get("/api/license/status", async (_req: Request, res: Response) => {
     const status = await licenseManager.getLicenseStatus();
-    res.json(status);
+    res.json({
+      ...status,
+      daysRemaining: getLicenseDaysRemaining(status.expiresAt),
+      licenseFilePath: resolveLicenseFilePath(),
+      dataDirectory: path.dirname(resolveLicenseConfigDir()),
+    });
   });
 
   app.post("/api/license/activate", async (req: Request, res: Response) => {

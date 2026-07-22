@@ -198,16 +198,16 @@ if ($iscc -and (Test-Path $iscc)) {
   Write-Host "Compiling TourMasterSetup.exe..."
   & $iscc "/DAppVersion=$AppVersion" (Join-Path $Root "packaging\installer\TournamentMaster.iss")
   if ($LASTEXITCODE -eq 0) {
-    $setupExe = Join-Path $ReleaseDir "TourMasterSetup.exe"
     $versionedExe = Join-Path $ReleaseDir "TourMasterSetup_$AppVersion.exe"
-    if (Test-Path -LiteralPath $setupExe) {
-      Copy-Item -LiteralPath $setupExe -Destination $versionedExe -Force
-      Write-Host "Done: release\installer\TourMasterSetup.exe"
+    $setupExe = Join-Path $ReleaseDir "TourMasterSetup.exe"
+    if (Test-Path -LiteralPath $versionedExe) {
+      Copy-Item -LiteralPath $versionedExe -Destination $setupExe -Force
       Write-Host "Done: release\installer\TourMasterSetup_$AppVersion.exe"
+      Write-Host "Done: release\installer\TourMasterSetup.exe (latest alias)"
       & (Join-Path $Root "packaging\scripts\generate-update-manifest.ps1") -Root $Root -InstallerPath $versionedExe | Out-Null
       Write-Host "Done: release\installer\update.json"
     } else {
-      Write-Host "Done: release\installer\TourMasterSetup.exe"
+      Write-Host "WARNING: Expected versioned installer not found: $versionedExe"
     }
   } else {
     Write-Host "ISCC failed with exit code $LASTEXITCODE"

@@ -1,7 +1,7 @@
 ﻿{
     "name":  "tournament-master-local-server",
     "private":  true,
-    "version":  "1.0.9",
+    "version":  "1.0.10",
     "description":  "Tournament Master local server for QR Live Tracking and tournament data",
     "main":  "dist/server.cjs",
     "scripts":  {
