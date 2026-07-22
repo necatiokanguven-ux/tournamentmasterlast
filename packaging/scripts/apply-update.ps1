@@ -59,6 +59,9 @@ function Stop-TournamentMasterProcesses {
   $pm2Bin = Join-Path $Dir "node_modules\pm2\bin\pm2"
   if (Test-Path -LiteralPath $pm2Bin) {
     Write-UpdateLog "SHUTDOWN stopping PM2 processes"
+    & $nodeExe $pm2Bin stop tournament-master 2>$null | Out-Null
+    & $nodeExe $pm2Bin stop tournament-master-watchdog 2>$null | Out-Null
+    Start-Sleep -Seconds 1
     & $nodeExe $pm2Bin delete tournament-master 2>$null | Out-Null
     & $nodeExe $pm2Bin delete tournament-master-watchdog 2>$null | Out-Null
     Start-Sleep -Seconds 2
@@ -70,16 +73,20 @@ function Stop-TournamentMasterProcesses {
     & $gracefulStop -InstallDir $Dir -HttpPort $Port
   }
 
-  $deadline = (Get-Date).AddSeconds(30)
+  $deadline = (Get-Date).AddSeconds(45)
   while ((Get-Date) -lt $deadline) {
     $busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
     if (-not $busy) {
+      Write-UpdateLog "SHUTDOWN port $Port is free"
       return
     }
     Start-Sleep -Milliseconds 500
   }
 
-  Write-UpdateLog "SHUTDOWN port $Port still busy after timeout"
+  Write-UpdateLog "SHUTDOWN forcing processes on port $Port"
+  foreach ($conn in Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
+    Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue
+  }
 }
 
 function New-RollbackSnapshot {
@@ -133,6 +140,29 @@ function New-RollbackSnapshot {
   }
 }
 
+function Start-TournamentMasterAfterUpdate {
+  param([string]$Dir, [int]$Port)
+
+  $launcher = Join-Path $Dir "TourMasterLauncher.bat"
+  if (Test-Path -LiteralPath $launcher) {
+    Write-UpdateLog "RESTART launching TourMasterLauncher.bat"
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "`"$launcher`"" -WorkingDirectory $Dir -WindowStyle Normal
+  } else {
+    $startBat = Join-Path $Dir "start.bat"
+    if (Test-Path -LiteralPath $startBat) {
+      Write-UpdateLog "RESTART launching start.bat"
+      Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "`"$startBat`"" -WorkingDirectory $Dir -WindowStyle Normal
+    }
+  }
+
+  Start-Sleep -Seconds 8
+  $browserScript = Join-Path $Dir "scripts\open-director-browser.ps1"
+  if (Test-Path -LiteralPath $browserScript) {
+    Write-UpdateLog "RESTART opening browser on port $Port"
+    & $browserScript -Url "http://localhost:$Port/" -ErrorAction SilentlyContinue
+  }
+}
+
 try {
   if (-not (Test-Path -LiteralPath $InstallerPath)) {
     throw "Installer not found: $InstallerPath"
@@ -140,6 +170,8 @@ try {
 
   Write-UpdateLog "APPLY started target=$TargetVersion installer=$InstallerPath"
   Write-UpdateState @{ phase = "applying"; targetVersion = $TargetVersion; installerPath = $InstallerPath }
+
+  Stop-TournamentMasterProcesses -Dir $InstallDir -Port $HttpPort
 
   Unblock-File -LiteralPath $InstallerPath -ErrorAction SilentlyContinue
   if (Test-Path -LiteralPath "$InstallerPath`:Zone.Identifier") {
@@ -173,11 +205,13 @@ try {
     rollbackPath = $rollbackPath
   }
 
-  Stop-TournamentMasterProcesses -Dir $InstallDir -Port $HttpPort
-
-  Write-UpdateLog "INSTALL launching installer"
+  Write-UpdateLog "INSTALL launching installer (UAC prompt may appear)"
   $installArgs = "/SILENT /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS /NORESTART"
   $process = Start-Process -FilePath $InstallerPath -ArgumentList $installArgs -Wait -PassThru -Verb RunAs
+  if (-not $process) {
+    throw "Installer did not start. Administrator approval may have been cancelled."
+  }
+
   $exitCode = $process.ExitCode
   Write-UpdateLog "INSTALL complete exit=$exitCode"
 
@@ -188,6 +222,7 @@ try {
       errorCode = "INSTALL_FAILED"
     }
     & (Join-Path $scriptDir "rollback-update.ps1") -InstallDir $InstallDir -Reason "INSTALL_EXIT_$exitCode"
+    Start-TournamentMasterAfterUpdate -Dir $InstallDir -Port $HttpPort
     exit $exitCode
   }
 
@@ -196,6 +231,8 @@ try {
     targetVersion = $TargetVersion
   }
   Write-UpdateLog "APPLY complete awaiting_health=true"
+
+  Start-TournamentMasterAfterUpdate -Dir $InstallDir -Port $HttpPort
   exit 0
 } catch {
   Write-UpdateLog "APPLY failed error=$($_.Exception.Message)"
@@ -204,5 +241,6 @@ try {
     error = $_.Exception.Message
     errorCode = "APPLY_FAILED"
   }
+  Start-TournamentMasterAfterUpdate -Dir $InstallDir -Port $HttpPort
   exit 1
 }

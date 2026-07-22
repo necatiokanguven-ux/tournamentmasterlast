@@ -2,7 +2,7 @@
 ; Build: packaging\installer\build-installer.ps1
 
 #ifndef AppVersion
-#define AppVersion "1.0.10"
+#define AppVersion "1.0.11"
 #endif
 
 #define AppName "Tournament Master"
@@ -61,7 +61,7 @@ Name: "{group}\Backup Data"; Filename: "{app}\backup.bat"; WorkingDir: "{app}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon; WorkingDir: "{app}"; IconFilename: "{app}\assets\logoexe.ico"
 
 [Run]
-Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser
+Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall runasoriginaluser
 
 [Code]
 procedure InitializeWizard;

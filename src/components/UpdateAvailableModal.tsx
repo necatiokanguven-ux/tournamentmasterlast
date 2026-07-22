@@ -97,7 +97,7 @@ export default function UpdateAvailableModal({ update }: UpdateAvailableModalPro
 
           {uiPhase === "installing" ? (
             <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-amber-100">
-              {message ?? "The application will now close to install the update."}
+              {message ?? "The update installer is starting. If Windows asks for administrator permission, choose Yes."}
             </div>
           ) : null}
 

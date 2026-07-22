@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import { Transform } from "stream";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
 import { appendUpdateLog } from "./updateLog";
@@ -47,6 +48,27 @@ export async function downloadUpdateInstaller(options: {
   });
 
   return activeDownload;
+}
+
+function writeDownloadProgress(options: {
+  version: string;
+  installerPath: string;
+  downloadedBytes: number;
+  totalBytes: number;
+}): void {
+  const percent =
+    options.totalBytes > 0
+      ? Math.min(100, Math.round((options.downloadedBytes / options.totalBytes) * 100))
+      : undefined;
+
+  writeUpdateState({
+    phase: "downloading",
+    targetVersion: options.version,
+    downloadedBytes: options.downloadedBytes,
+    totalBytes: options.totalBytes || undefined,
+    downloadPercent: percent,
+    installerPath: options.installerPath,
+  });
 }
 
 async function performDownload(options: {
@@ -103,22 +125,46 @@ async function performDownload(options: {
 
     const totalBytes = Number(response.headers.get("content-length") ?? options.expectedSizeBytes ?? 0);
     let downloadedBytes = 0;
+    let lastProgressWrite = 0;
+    let lastByteAt = Date.now();
 
-    const nodeStream = Readable.fromWeb(response.body as never);
-    nodeStream.on("data", (chunk: Buffer) => {
-      downloadedBytes += chunk.length;
-      const percent = totalBytes > 0 ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)) : undefined;
-      writeUpdateState({
-        phase: "downloading",
-        targetVersion: options.version,
-        downloadedBytes,
-        totalBytes: totalBytes || undefined,
-        downloadPercent: percent,
-        installerPath,
-      });
+    const stallInterval = setInterval(() => {
+      if (Date.now() - lastByteAt > 90_000) {
+        controller.abort();
+      }
+    }, 5_000);
+
+    const progressTracker = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        downloadedBytes += chunk.length;
+        lastByteAt = Date.now();
+        const now = Date.now();
+        if (now - lastProgressWrite >= 400) {
+          lastProgressWrite = now;
+          writeDownloadProgress({
+            version: options.version,
+            installerPath,
+            downloadedBytes,
+            totalBytes,
+          });
+        }
+        callback(null, chunk);
+      },
     });
 
-    await pipeline(nodeStream, fs.createWriteStream(tempPath));
+    try {
+      await pipeline(Readable.fromWeb(response.body as never), progressTracker, fs.createWriteStream(tempPath));
+    } finally {
+      clearInterval(stallInterval);
+    }
+
+    writeDownloadProgress({
+      version: options.version,
+      installerPath,
+      downloadedBytes,
+      totalBytes: totalBytes || downloadedBytes,
+    });
+
     fs.renameSync(tempPath, installerPath);
 
     writeUpdateState({ phase: "verifying", targetVersion: options.version, installerPath });
@@ -159,4 +205,12 @@ async function performDownload(options: {
     });
     return null;
   }
+}
+
+export async function isInstallerVerified(installerPath: string, expectedSha256: string): Promise<boolean> {
+  if (!fs.existsSync(installerPath)) {
+    return false;
+  }
+  const hash = await computeFileSha256(installerPath);
+  return hash === expectedSha256.toLowerCase();
 }

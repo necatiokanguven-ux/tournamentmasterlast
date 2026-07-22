@@ -9,9 +9,11 @@ import {
   downloadUpdateInstaller,
   getInstallerPath,
   getActiveDownloadPromise,
+  isInstallerVerified,
 } from "./updateDownload";
 import { appendUpdateLog, readUpdateLogTail } from "./updateLog";
 import {
+  ensureUpdatesDir,
   getInstallDir,
   isUpdateSupportedPlatform,
 } from "./updatePaths";
@@ -85,7 +87,8 @@ export function registerUpdateRoutes(app: Express): void {
     const mandatory = Boolean(manifest.mandatory || belowMinimum);
     const snoozed = !mandatory && isUpdateSnoozed(state);
     const installerPath = getInstallerPath(manifest.version);
-    const downloadReady = fs.existsSync(installerPath) && state.phase === "downloaded";
+    const verifiedOnDisk = await isInstallerVerified(installerPath, manifest.platform.sha256);
+    const downloadReady = verifiedOnDisk;
 
     res.json({
       supported: true,
@@ -186,9 +189,14 @@ export function registerUpdateRoutes(app: Express): void {
       return;
     }
 
+    if (getActiveDownloadPromise()) {
+      res.status(409).json({ error: "DOWNLOAD_IN_PROGRESS" });
+      return;
+    }
+
     const state = readUpdateState();
     const installerPath = getInstallerPath(manifest.version);
-    if (!fs.existsSync(installerPath)) {
+    if (!verified) {
       res.status(409).json({ error: "INSTALLER_NOT_READY" });
       return;
     }
@@ -209,6 +217,10 @@ export function registerUpdateRoutes(app: Express): void {
     appendUpdateLog(`APPLY requested version=${manifest.version}`);
 
     const httpPort = Number(process.env.TM_HTTP_PORT ?? process.env.PORT ?? 3000);
+    const logPath = path.join(getInstallDir(), "Updates", "apply-update.log");
+    ensureUpdatesDir();
+    const logFd = fs.openSync(logPath, "a");
+
     const args = [
       "-NoProfile",
       "-ExecutionPolicy",
@@ -229,15 +241,11 @@ export function registerUpdateRoutes(app: Express): void {
 
     const child = spawn("powershell.exe", args, {
       detached: true,
-      stdio: "ignore",
-      windowsHide: true,
+      stdio: ["ignore", logFd, logFd],
+      windowsHide: false,
     });
     child.unref();
 
-    res.json({ ok: true, message: "Update installation is starting. The application will close shortly." });
-
-    setTimeout(() => {
-      process.kill(process.pid, "SIGTERM");
-    }, 750).unref();
+    res.json({ ok: true, message: "Update installation is starting. Approve the Windows administrator prompt if it appears." });
   });
 }
