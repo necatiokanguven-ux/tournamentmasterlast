@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   X,
   Layers,
+  PhoneCall,
 } from "lucide-react";
 import { useDealerControl } from "../dealerRotation/useDealerControl";
 import { syncDealerControlTablesWithTournament } from "../dealerRotation/dealerControlTableSync";
@@ -30,6 +31,7 @@ import DealerWorkHoursPanel from "./DealerWorkHoursPanel";
 import StaffWorkHoursPanel from "./StaffWorkHoursPanel";
 import DealerControlStatusPanel from "./DealerControlStatusPanel";
 import DealerControlPackagePanel from "./DealerControlPackagePanel";
+import FloorSetupModal from "./FloorSetupModal";
 import {
   PRESET_STAFF_ROLES,
   formatStaffRoleLabel,
@@ -105,7 +107,7 @@ export default function DealerControlView() {
     dismissOperatorAlert,
     setStaffZone,
   } = useDealerControl();
-  const { state: tournamentState, saveDealerZones } = useTournament();
+  const { state: tournamentState, saveDealerZones, saveFloorTeams } = useTournament();
 
   const liveNow = useLiveSecond();
 
@@ -127,6 +129,9 @@ export default function DealerControlView() {
   const [assignDealerId, setAssignDealerId] = useState("");
   const [assignTableId, setAssignTableId] = useState("");
   const [level1ConfirmOpen, setLevel1ConfirmOpen] = useState(false);
+  const [floorSetupOpen, setFloorSetupOpen] = useState(false);
+  const [floorSetupTeamCount, setFloorSetupTeamCount] = useState(1);
+  const [floorSetupAutoQrTeamId, setFloorSetupAutoQrTeamId] = useState<string | null>(null);
 
   const { rotation, tables: dealerTables, checkInUrl, serverTime, coverageSummary, dealerZones, zonesEnabled } = state;
 
@@ -224,6 +229,12 @@ export default function DealerControlView() {
       showSettingsNotice("Enter a custom role name.");
       return;
     }
+
+    const addedRole = form.rolePreset;
+    const nextFloorStaffCount = rotation.staff.filter(
+      (member) => member.active && member.role === "floor",
+    ).length + (addedRole === "floor" ? 1 : 0);
+
     await addStaff({
       firstName: form.firstName,
       lastName: form.lastName,
@@ -234,6 +245,20 @@ export default function DealerControlView() {
       customRole: form.customRole,
       zoneId: form.zoneId || null,
     });
+
+    if (addedRole === "floor") {
+      const teamCount = Math.max(
+        nextFloorStaffCount,
+        tournamentState.settings.floorTeams?.length ?? 0,
+        1,
+      );
+      setFloorSetupTeamCount(teamCount);
+      setFloorSetupAutoQrTeamId(`floor-${nextFloorStaffCount}`);
+      setFloorSetupOpen(true);
+      setTab("roster");
+      showSettingsNotice("Floor staff added — assign responsible tables, then scan Floor QR on the phone.");
+    }
+
     setForm({
       firstName: "",
       lastName: "",
@@ -357,9 +382,9 @@ export default function DealerControlView() {
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
       <header>
-        <h1 className="text-2xl font-black uppercase tracking-wider text-zinc-100">Dealer Control</h1>
+        <h1 className="text-2xl font-black uppercase tracking-wider text-zinc-100">Personel Control</h1>
         <p className="text-sm text-zinc-500 mt-1">
-          Manage dealer roster, rotation, pool assignments, and lounge check-in.
+          Manage dealer roster, floor teams, rotation, pool assignments, and lounge check-in.
         </p>
       </header>
 
@@ -630,6 +655,31 @@ export default function DealerControlView() {
       ) : null}
 
       {tab === "roster" ? (
+        <div className="space-y-4">
+          <section className="rounded-2xl border border-orange-500/20 bg-orange-500/5 p-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xs font-black uppercase tracking-wider text-orange-300 flex items-center gap-2">
+                <PhoneCall className="w-4 h-4" /> Floor Teams
+              </h2>
+              <p className="text-[11px] text-zinc-400 mt-1">
+                Assign tables to floor teams and open Floor QR so each floor phone can register.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const floorStaffCount = rotation.staff.filter((member) => member.active && member.role === "floor").length;
+                const teamCount = Math.max(floorStaffCount, tournamentState.settings.floorTeams?.length ?? 0, 1);
+                setFloorSetupTeamCount(teamCount);
+                setFloorSetupAutoQrTeamId(null);
+                setFloorSetupOpen(true);
+              }}
+              className="rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-2 text-[10px] font-black uppercase text-orange-300"
+            >
+              Open Floor Setup
+            </button>
+          </section>
+
         <div className="grid lg:grid-cols-2 gap-4">
           <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 space-y-3">
             <h2 className="text-xs font-black uppercase tracking-wider text-zinc-300 flex items-center gap-2">
@@ -823,12 +873,35 @@ export default function DealerControlView() {
                     >
                       OFF
                     </button>
+                    {member.role === "floor" ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const floorIndex = rotation.staff
+                            .filter((entry) => entry.active && entry.role === "floor")
+                            .findIndex((entry) => entry.id === member.id);
+                          const teamId = `floor-${Math.max(floorIndex + 1, 1)}`;
+                          const teamCount = Math.max(
+                            rotation.staff.filter((entry) => entry.active && entry.role === "floor").length,
+                            tournamentState.settings.floorTeams?.length ?? 0,
+                            1,
+                          );
+                          setFloorSetupTeamCount(teamCount);
+                          setFloorSetupAutoQrTeamId(teamId);
+                          setFloorSetupOpen(true);
+                        }}
+                        className="px-2 py-1 rounded bg-orange-500/15 border border-orange-500/30 text-[9px] font-bold uppercase text-orange-300"
+                      >
+                        Floor Tables / QR
+                      </button>
+                    ) : null}
                   </div>
                 )}
               </div>
             );
             })}
           </section>
+        </div>
         </div>
       ) : null}
 
@@ -1146,6 +1219,20 @@ export default function DealerControlView() {
           initialZones={configuredZones}
           onSave={saveDealerZones}
           onClose={() => setZoneSetupOpen(false)}
+        />
+      ) : null}
+
+      {floorSetupOpen ? (
+        <FloorSetupModal
+          tables={tournamentState.tables.map((table) => ({ id: table.id, number: table.number }))}
+          initialTeams={tournamentState.settings.floorTeams ?? []}
+          initialTeamCount={floorSetupTeamCount}
+          autoOpenQrTeamId={floorSetupAutoQrTeamId}
+          onSave={saveFloorTeams}
+          onClose={() => {
+            setFloorSetupOpen(false);
+            setFloorSetupAutoQrTeamId(null);
+          }}
         />
       ) : null}
       </div>

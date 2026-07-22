@@ -3,8 +3,33 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { HistoryEvent, Player } from "../types";
+import type { HistoryEvent, Player, Table } from "../types";
 import { normalizeCountryValue, parseCountryValue } from "./countryFlags";
+
+export function resolveTableNumber(
+  tableId: string | null | undefined,
+  tables: Pick<Table, "id" | "number">[],
+): number | null {
+  if (!tableId) return null;
+  return tables.find((table) => table.id === tableId)?.number ?? null;
+}
+
+export function formatPlayerTableSeat(
+  player: Pick<Player, "tableId" | "seatIndex">,
+  tables: Pick<Table, "id" | "number">[],
+  style: "compact" | "slash" = "compact",
+): string {
+  if (!player.tableId) return "Unseated";
+
+  const tableNumber = resolveTableNumber(player.tableId, tables);
+  if (tableNumber === null) return "Unseated";
+
+  const seat = player.seatIndex !== null ? player.seatIndex + 1 : "—";
+  if (style === "slash") {
+    return `Table ${tableNumber} / Seat ${seat}`;
+  }
+  return `Table ${tableNumber} (Seat ${seat})`;
+}
 
 export function formatPlayerStatusDisplay(status: string): string {
   return status.toUpperCase();
@@ -54,6 +79,7 @@ export function exportPlayerRegistryCsv(
   players: Player[],
   history: HistoryEvent[],
   tournamentName: string,
+  tables: Pick<Table, "id" | "number">[],
 ): void {
   const sorted = sortPlayersForReport(players);
   let csv = "\uFEFF";
@@ -65,7 +91,8 @@ export function exportPlayerRegistryCsv(
     "Name,Nickname,Country,Phone,Birth Date,Status,Rebuys,Re-entries,Addons,Table,Seat,Registered At,Notes\n";
 
   for (const player of sorted) {
-    const table = player.tableId ? player.tableId.replace("table-", "") : "";
+    const tableNumber = resolveTableNumber(player.tableId, tables);
+    const table = tableNumber !== null ? String(tableNumber) : "";
     const seat = player.seatIndex !== null ? String(player.seatIndex + 1) : "";
     csv += [
       csvEscape(playerFullName(player)),
@@ -137,12 +164,11 @@ function buildPlayerRegistryPrintHtml(
   history: HistoryEvent[],
   tournamentName: string,
   generatedAt: string,
+  tables: Pick<Table, "id" | "number">[],
 ): string {
   const playerRows = players
     .map((player, index) => {
-      const tableSeat = player.tableId
-        ? `Table ${player.tableId.replace("table-", "")} / Seat ${player.seatIndex !== null ? player.seatIndex + 1 : "—"}`
-        : "Unseated";
+      const tableSeat = formatPlayerTableSeat(player, tables, "slash");
 
       return `<tr>
         <td>${index + 1}</td>
@@ -341,10 +367,11 @@ export function openPlayerRegistryPrintWindow(
   players: Player[],
   history: HistoryEvent[],
   tournamentName: string,
+  tables: Pick<Table, "id" | "number">[],
 ): void {
   const sorted = sortPlayersForReport(players);
   const generatedAt = new Date().toLocaleString();
-  const html = buildPlayerRegistryPrintHtml(sorted, history, tournamentName, generatedAt);
+  const html = buildPlayerRegistryPrintHtml(sorted, history, tournamentName, generatedAt, tables);
 
   const printWindow = window.open("", "_blank", "noopener,noreferrer,width=1200,height=900");
   if (!printWindow) {

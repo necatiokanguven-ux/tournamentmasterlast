@@ -13,6 +13,7 @@ import {
   formatEventLine,
   formatPlayerNameDisplay,
   formatPlayerStatusDisplay,
+  formatPlayerTableSeat,
   getEventsForPlayer,
   openPlayerRegistryPrintWindow,
   playerFullName,
@@ -23,6 +24,7 @@ interface PlayerListShowModalProps {
   players: Player[];
   history: HistoryEvent[];
   tournamentName: string;
+  tables: Array<{ id: string; number: number }>;
   onClose: () => void;
 }
 
@@ -30,16 +32,17 @@ export default function PlayerListShowModal({
   players,
   history,
   tournamentName,
+  tables,
   onClose,
 }: PlayerListShowModalProps) {
   const sortedPlayers = useMemo(() => sortPlayersForReport(players), [players]);
 
   const handleExportCsv = () => {
-    exportPlayerRegistryCsv(players, history, tournamentName);
+    exportPlayerRegistryCsv(players, history, tournamentName, tables);
   };
 
   const handleExportPdf = () => {
-    openPlayerRegistryPrintWindow(players, history, tournamentName);
+    openPlayerRegistryPrintWindow(players, history, tournamentName, tables);
   };
 
   return createPortal(
@@ -135,7 +138,7 @@ export default function PlayerListShowModal({
                         <td className="py-2 pr-3 text-center font-mono print:text-black">{player.addons}</td>
                         <td className="py-2 pr-3 print:text-black">
                           {player.tableId
-                            ? `Table ${player.tableId.replace("table-", "")} / Seat ${player.seatIndex !== null ? player.seatIndex + 1 : "—"}`
+                            ? formatPlayerTableSeat(player, tables, "slash")
                             : "Unseated"}
                         </td>
                         <td className="py-2 pr-3 font-mono text-zinc-400 whitespace-nowrap print:text-black">

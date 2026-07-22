@@ -21,6 +21,10 @@ import { isWsEnabled } from "./config/featureFlags";
 import { useTournamentSocket } from "./websocket/useTournamentSocket";
 import { isClockChannelPayload } from "./websocket/clockChannelTypes";
 import SystemHealthView from "./components/SystemHealthView";
+import ServerStatusNav from "./components/ServerStatusNav";
+import { useLocalServerStatus } from "./hooks/useLocalServerStatus";
+import { useAppUpdate } from "./hooks/useAppUpdate";
+import UpdateAvailableModal from "./components/UpdateAvailableModal";
 import { useSystemHealthNavStatus, toneClass, statusBadgeClass, healthNavStatusClass } from "./systemHealth/useSystemHealthNavStatus";
 import { Timer, Settings, Users, Grid, FileText, ChevronLeft, ChevronRight, Monitor, KeyRound, Lock, UserCog, Shield } from "lucide-react";
 
@@ -109,9 +113,12 @@ export default function App() {
 
   const licenseNavStatus = getLicenseNavStatus(licenseLoading, isLicensed, licenseStatus);
   const systemHealthNav = useSystemHealthNavStatus(isLicensed && !licenseLoading);
+  const serverStatus = useLocalServerStatus();
+  const appUpdate = useAppUpdate();
 
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden font-sans flex-col">
+      <UpdateAvailableModal update={appUpdate} />
       <LocalServerBanner />
       <VenuePortHint />
       {wsState.enabled && wsState.reconnecting ? (
@@ -133,26 +140,40 @@ export default function App() {
       {/* Sidebar Navigation Panel (collapses on fullscreen print and option toggle) */}
       <aside 
         className={`bg-zinc-900 border-r border-zinc-800 flex flex-col justify-between transition-all duration-300 print:hidden ${
-          isNavCollapsed ? "w-16" : "w-64"
+          isNavCollapsed ? "w-28" : "w-64"
         }`}
         id="sidebar-navigation"
       >
         <div className="flex flex-col flex-1">
-          {/* Top Branding Section */}
-          <div className="p-4 border-b border-zinc-800/80 flex items-center justify-between">
-            {!isNavCollapsed && (
-              <div className="flex items-center gap-2">
-                <span className="text-xl">♠️</span>
-                <span className="font-black tracking-wider uppercase text-sm">TM STANDART</span>
+          {/* Branding + collapse — TM STANDART aligned with menu toggle */}
+          <div className="px-4 py-3 border-b border-zinc-800/80 flex items-center justify-between gap-2">
+            {!isNavCollapsed ? (
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-xl shrink-0">♠️</span>
+                <span className="font-black tracking-wider uppercase text-sm truncate">TM STANDART</span>
               </div>
+            ) : (
+              <span className="font-black tracking-wide uppercase text-[9px] leading-tight text-zinc-300">
+                TM STANDART
+              </span>
             )}
-            <button 
+            <button
               onClick={() => setIsNavCollapsed(prev => !prev)}
-              className="p-1 rounded-lg bg-zinc-950 border border-zinc-800 hover:border-zinc-600 transition text-zinc-400 hover:text-zinc-100 mx-auto"
+              className="p-1 rounded-lg bg-zinc-950 border border-zinc-800 hover:border-zinc-600 transition text-zinc-400 hover:text-zinc-100 shrink-0"
+              aria-label={isNavCollapsed ? "Expand menu" : "Collapse menu"}
             >
               {isNavCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
             </button>
           </div>
+
+          <ServerStatusNav
+            collapsed={isNavCollapsed}
+            status={serverStatus.status}
+            showRestartButton={serverStatus.showRestartButton}
+            restartBusy={serverStatus.restartBusy}
+            restartMessage={serverStatus.restartMessage}
+            onRestart={() => void serverStatus.restartServer()}
+          />
  
           {/* Navigation Links List */}
           <nav className="p-3 space-y-1.5 flex-1">
@@ -163,7 +184,7 @@ export default function App() {
               { id: "tables", label: "Tables", icon: Grid, color: "text-emerald-500" },
               { id: "players", label: "Player Management", icon: Users, color: "text-blue-500" },
               { id: "settings", label: "Tournament Setup", icon: Settings, color: "text-amber-500" },
-              { id: "dealer-control", label: "Dealer Control", icon: UserCog, color: "text-orange-500" },
+              { id: "dealer-control", label: "Personel Control", icon: UserCog, color: "text-orange-500" },
               { id: "system-health", label: "System Health", icon: Shield, color: "text-emerald-400", healthNav: true },
               { id: "reports", label: "Tournament Reports", icon: FileText, color: "text-purple-500" }
             ].map((nav) => {

@@ -11,7 +11,7 @@ import { IdScanPanel, type CameraOption } from "./IdScanPanel";
 import { CountryLabel, CountryFlag, countryInputDisplayValue } from "./CountryLabel";
 import PlayerListShowModal from "./PlayerListShowModal";
 import { normalizeCountryValue } from "../utils/countryFlags";
-import { formatPlayerStatusDisplay, formatPlayerNameDisplay } from "../utils/playerRegistryReport";
+import { formatPlayerStatusDisplay, formatPlayerNameDisplay, formatPlayerTableSeat } from "../utils/playerRegistryReport";
 import type { IdScanFields } from "../idScan/types";
 
 const ID_SCAN_CAMERA_STORAGE_KEY = "tm-id-scan-camera-device-id";
@@ -28,7 +28,7 @@ export default function PlayersView() {
     disqualifyPlayer
   } = useTournament();
 
-  const { players, history, settings } = state;
+  const { players, history, settings, tables } = state;
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"All" | PlayerStatus>("All");
@@ -387,7 +387,7 @@ export default function PlayersView() {
                       <td className="py-3 px-4 text-xs">
                         {player.tableId ? (
                           <span className="font-bold text-zinc-100 bg-zinc-900 border border-zinc-800 px-2 py-1 rounded-md">
-                            Table {player.tableId.replace("table-", "")} (Seat {player.seatIndex !== null ? player.seatIndex + 1 : "-"})
+                            {formatPlayerTableSeat(player, tables)}
                           </span>
                         ) : (
                           <span className="text-zinc-500 italic">Unseated</span>
@@ -629,6 +629,7 @@ export default function PlayersView() {
           players={players}
           history={history}
           tournamentName={settings.name}
+          tables={tables}
           onClose={() => setShowPlayerListModal(false)}
         />
       )}

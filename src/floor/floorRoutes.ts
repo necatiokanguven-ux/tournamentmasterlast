@@ -18,6 +18,7 @@ import {
 } from "../server/tournamentOperations";
 import { buildSeatSnapshot } from "../server/tableSnapshot";
 import { buildLocalUrl } from "../server/localNetwork";
+import { resolveFloorStaffDisplayName, enrichFloorTeamsWithStaffIds } from "../floor/floorStaffUtils";
 
 type DbAccessor = () => TournamentDatabase;
 type DbSaver = (db: TournamentDatabase) => void;
@@ -45,6 +46,7 @@ export function createFloorRouter(port: number, getDb: DbAccessor, saveDb: DbSav
     res.json({
       teamId: team.id,
       teamName: team.name,
+      staffDisplayName: resolveFloorStaffDisplayName(db, team.id),
       floorUrl: buildLocalUrl(port, `/floor?team=${encodeURIComponent(team.id)}`),
       tableNumbers: team.tableNumbers,
     });
@@ -68,6 +70,7 @@ export function createFloorRouter(port: number, getDb: DbAccessor, saveDb: DbSav
       version: db.meta.lastModified,
       teamId: team.id,
       teamName: team.name,
+      staffDisplayName: resolveFloorStaffDisplayName(db, team.id),
       tableNumbers: team.tableNumbers,
       calls: getActiveFloorCallsForTeam(db, teamId),
     });
@@ -113,6 +116,7 @@ export function createFloorRouter(port: number, getDb: DbAccessor, saveDb: DbSav
       version: db.meta.lastModified,
       teamId: team.id,
       teamName: team.name,
+      staffDisplayName: resolveFloorStaffDisplayName(db, team.id),
       tables,
     });
   });
@@ -227,8 +231,9 @@ export function createSettingsRouter(getDb: DbAccessor, saveDb: DbSaver) {
     }
 
     const db = getDb();
+    const enrichedTeams = enrichFloorTeamsWithStaffIds(teams, db);
     const validationError = validateFloorTeams(
-      teams,
+      enrichedTeams,
       db.tables.map((table) => table.number),
     );
 
@@ -239,7 +244,7 @@ export function createSettingsRouter(getDb: DbAccessor, saveDb: DbSaver) {
 
     db.settings = normalizeSettings({
       ...db.settings,
-      floorTeams: teams,
+      floorTeams: enrichedTeams,
     });
     bumpDatabaseMeta(db);
     saveDb(db);

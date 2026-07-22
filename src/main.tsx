@@ -29,7 +29,7 @@ function RootApp() {
     return <DealerShell />;
   }
 
-  if (pathname.startsWith('/floor')) {
+  if (pathname.startsWith('/floor') || pathname === '/f' || pathname.startsWith('/f/')) {
     return <FloorView />;
   }
 

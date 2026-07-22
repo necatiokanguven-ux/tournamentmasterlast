@@ -48,6 +48,8 @@ import { startAutoProtectionEngine } from "./src/server/systemHealth/throttleEng
 import { createIdScanRouter } from "./src/server/idScan/idScanRoutes";
 import { buildLocalUrl, getLocalNetworkAddresses, getPrimaryLocalAddress } from "./src/server/localNetwork";
 import { openDirectorBrowser } from "./src/server/openBrowser";
+import { registerUpdateRoutes } from "./src/server/update/updateRoutes";
+import { schedulePostUpdateHealthCheck } from "./src/server/update/updatePostInstall";
 
 const app = express();
 const PORT = resolveServerPort();
@@ -147,6 +149,7 @@ async function startServer(
     console.log(`Dealer Control API: ${appUrl}/api/dealer-control/state`);
     console.log(`Floor Mobile: ${appUrl}/floor?team=floor-1`);
     openBrowser(appUrl);
+    schedulePostUpdateHealthCheck(PORT);
 
     const BACKGROUND_TICK_MS = 5_000;
     backgroundTickInterval = setInterval(() => {
@@ -445,6 +448,8 @@ async function bootstrap() {
     uptimeMs: () => Math.round(process.uptime() * 1000),
     persistence: () => repository.backend,
   });
+
+  registerUpdateRoutes(app);
 
   await startServer(dealerControlRouter, dealerRotationTrigger);
 }

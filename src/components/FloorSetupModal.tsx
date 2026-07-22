@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { QrCode, Plus, Minus, X } from "lucide-react";
+import { QrCode, Plus, Minus, X, Loader2 } from "lucide-react";
 import type { FloorTeam } from "../types";
 import { localApi } from "../config/api";
 
 type FloorSetupModalProps = {
   tables: Array<{ id: string; number: number }>;
   initialTeams: FloorTeam[];
+  initialTeamCount?: number;
+  autoOpenQrTeamId?: string | null;
   onSave: (teams: FloorTeam[]) => Promise<void>;
   onClose: () => void;
 };
@@ -36,25 +38,41 @@ function buildDefaultTeams(count: number, tableNumbers: number[]): FloorTeam[] {
 export default function FloorSetupModal({
   tables,
   initialTeams,
+  initialTeamCount,
+  autoOpenQrTeamId = null,
   onSave,
   onClose,
 }: FloorSetupModalProps) {
   const tableNumbers = useMemo(() => tables.map((table) => table.number).sort((a, b) => a - b), [tables]);
-  const [teamCount, setTeamCount] = useState(Math.max(initialTeams.length, 1));
+  const [teamCount, setTeamCount] = useState(
+    initialTeamCount ?? Math.max(initialTeams.length, 1),
+  );
   const [teams, setTeams] = useState<FloorTeam[]>(
-    initialTeams.length > 0 ? initialTeams : buildDefaultTeams(1, tableNumbers),
+    initialTeams.length > 0 ? initialTeams : buildDefaultTeams(initialTeamCount ?? 1, tableNumbers),
   );
   const [qrTeamId, setQrTeamId] = useState<string | null>(null);
   const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const [qrLoadingTeamId, setQrLoadingTeamId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (initialTeams.length > 0) {
-      setTeams(initialTeams);
-      setTeamCount(initialTeams.length);
+      const count = Math.max(initialTeamCount ?? initialTeams.length, initialTeams.length, 1);
+      if (count > initialTeams.length) {
+        const extended = buildDefaultTeams(count, tableNumbers);
+        setTeams(extended.map((team, index) => initialTeams[index] ?? team));
+      } else {
+        setTeams(initialTeams);
+      }
+      setTeamCount(count);
+      return;
     }
-  }, [initialTeams]);
+
+    const count = initialTeamCount ?? 1;
+    setTeamCount(count);
+    setTeams(buildDefaultTeams(count, tableNumbers));
+  }, [initialTeams, initialTeamCount, tableNumbers]);
 
   const toggleTable = (teamIndex: number, tableNumber: number) => {
     setTeams((current) =>
@@ -83,26 +101,52 @@ export default function FloorSetupModal({
     setTeams(buildDefaultTeams(safeCount, tableNumbers));
   };
 
-  const openTeamQr = async (teamId: string) => {
+  const persistTeams = async () => {
+    await onSave(teams);
+  };
+
+  const openTeamQr = async (teamId: string, options?: { skipPersist?: boolean }) => {
     setQrTeamId(teamId);
     setQrUrl(null);
     setError(null);
+    setQrLoadingTeamId(teamId);
 
     try {
+      if (!options?.skipPersist) {
+        await persistTeams();
+      }
+
       const response = await fetch(localApi(`/api/floor/teams/${encodeURIComponent(teamId)}/qr-url`));
-      if (!response.ok) throw new Error("Could not load floor QR.");
+      if (!response.ok) {
+        throw new Error("Could not load floor QR. Save table assignments first.");
+      }
+
       const data = await response.json();
-      setQrUrl(data.floorUrl ?? null);
+      if (!data.floorUrl) {
+        throw new Error("Floor QR URL is unavailable.");
+      }
+
+      setQrUrl(data.floorUrl);
     } catch (loadError) {
+      setQrTeamId(null);
       setError(loadError instanceof Error ? loadError.message : "Could not load floor QR.");
+    } finally {
+      setQrLoadingTeamId(null);
     }
   };
 
   const handleSave = async () => {
     setSaving(true);
     setError(null);
+
     try {
-      await onSave(teams);
+      await persistTeams();
+
+      if (autoOpenQrTeamId) {
+        await openTeamQr(autoOpenQrTeamId, { skipPersist: true });
+        return;
+      }
+
       onClose();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Failed to save floor setup.");
@@ -120,7 +164,7 @@ export default function FloorSetupModal({
 
         <h2 className="text-xl font-black uppercase tracking-wider">Floor Setup</h2>
         <p className="mt-2 text-sm text-zinc-400">
-          Assign tables to floor teams. Each table can belong to only one team.
+          Assign responsible tables to each floor team, save, then open Floor QR so the floor phone can scan and register.
         </p>
 
         <div className="mt-5 flex items-center gap-3">
@@ -144,9 +188,15 @@ export default function FloorSetupModal({
                 </div>
                 <button
                   type="button"
+                  disabled={qrLoadingTeamId === team.id || saving}
                   onClick={() => void openTeamQr(team.id)}
-                  className="rounded-xl border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-[10px] font-black uppercase text-orange-300"
+                  className="rounded-xl border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-[10px] font-black uppercase text-orange-300 disabled:opacity-40 inline-flex items-center gap-1.5"
                 >
+                  {qrLoadingTeamId === team.id ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <QrCode className="w-3.5 h-3.5" />
+                  )}
                   Floor QR
                 </button>
               </div>
@@ -184,8 +234,9 @@ export default function FloorSetupModal({
             type="button"
             disabled={saving}
             onClick={() => void handleSave()}
-            className="rounded-xl bg-amber-500 px-4 py-2 text-xs font-black uppercase text-black disabled:opacity-40"
+            className="rounded-xl bg-amber-500 px-4 py-2 text-xs font-black uppercase text-black disabled:opacity-40 inline-flex items-center gap-2"
           >
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
             Save Floor Setup
           </button>
         </div>
@@ -195,15 +246,24 @@ export default function FloorSetupModal({
             <div className="relative w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-900 p-6">
               <button
                 type="button"
-                onClick={() => setQrTeamId(null)}
+                onClick={() => {
+                  setQrTeamId(null);
+                  setQrUrl(null);
+                  if (autoOpenQrTeamId) {
+                    onClose();
+                  }
+                }}
                 className="absolute top-4 right-4 text-zinc-400 hover:text-white"
               >
                 <X className="w-5 h-5" />
               </button>
               <div className="flex items-center gap-2 text-orange-400">
                 <QrCode className="w-5 h-5" />
-                <h3 className="text-lg font-black uppercase">{qrTeamId} QR</h3>
+                <h3 className="text-lg font-black uppercase">{teams.find((team) => team.id === qrTeamId)?.name ?? qrTeamId} QR</h3>
               </div>
+              <p className="mt-2 text-xs text-zinc-400">
+                Scan with the floor phone to open the mobile floor console for this team&apos;s tables.
+              </p>
               <div className="mt-5 flex flex-col items-center gap-3">
                 <div className="rounded-2xl bg-white p-3">
                   <QRCodeSVG value={qrUrl} size={220} level="M" />

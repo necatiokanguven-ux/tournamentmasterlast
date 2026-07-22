@@ -1,8 +1,11 @@
 ; Tournament Master — Inno Setup script (Phase 11b)
 ; Build: packaging\installer\build-installer.ps1
 
+#ifndef AppVersion
+#define AppVersion "1.0.9"
+#endif
+
 #define AppName "Tournament Master"
-#define AppVersion "1.0.8"
 #define AppPublisher "PokerClup"
 #define AppURL "https://pokerclup.com"
 #define AppExeName "TourMasterLauncher.bat"
@@ -12,10 +15,11 @@
 AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
 AppName={#AppName}
 AppVersion={#AppVersion}
+AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 DefaultDirName={#DefaultInstallDir}
-UsePreviousAppDir=no
+UsePreviousAppDir=yes
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir=..\..\release\installer
@@ -29,6 +33,9 @@ WizardImageFile=assets\setup-image.bmp
 WizardSmallImageFile=assets\wizard-small.bmp
 SetupIconFile=assets\logoexe.ico
 UninstallDisplayIcon={app}\assets\logoexe.ico
+AppMutex=TournamentMasterAppMutex
+CloseApplications=force
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -36,8 +43,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: checkedonce
 
+[Dirs]
+Name: "{app}\Updates"; Permissions: users-modify; Flags: uninsneveruninstall
+Name: "{app}\data"; Permissions: users-modify; Flags: uninsneveruninstall
+
 [Files]
-Source: "..\..\release\TourMasterSetup-staging\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\release\TourMasterSetup-staging\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "data\*,Updates\*,Updates\*"
 Source: "..\..\public\logo.png"; DestDir: "{app}\dist"; Flags: ignoreversion
 
 [Icons]
@@ -49,7 +60,7 @@ Name: "{group}\Backup Data"; Filename: "{app}\backup.bat"; WorkingDir: "{app}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon; WorkingDir: "{app}"; IconFilename: "{app}\assets\logoexe.ico"
 
 [Run]
-Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [Code]
 procedure InitializeWizard;
@@ -71,13 +82,19 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   DataRoot: String;
+  UpdatesRoot: String;
 begin
   if CurUninstallStep = usUninstall then
   begin
     DataRoot := ExpandConstant('{app}\data');
+    UpdatesRoot := ExpandConstant('{app}\Updates');
     if DirExists(DataRoot) then
     begin
       Log('Preserving tournament data at: ' + DataRoot);
+    end;
+    if DirExists(UpdatesRoot) then
+    begin
+      Log('Preserving update artifacts at: ' + UpdatesRoot);
     end;
   end;
 end;

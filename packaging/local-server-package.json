@@ -1,19 +1,23 @@
-{
-  "name": "tournament-master-local-server",
-  "private": true,
-  "version": "1.0.0",
-  "description": "Tournament Master local server for QR Live Tracking and tournament data",
-  "main": "dist/server.cjs",
-  "scripts": {
-    "start": "node dist/server.cjs"
-  },
-  "engines": {
-    "node": ">=18"
-  },
-  "dependencies": {
-    "dotenv": "^17.2.3",
-    "express": "^4.21.2",
-    "pg": "^8.22.0",
-    "ws": "^8.21.0"
-  }
+﻿{
+    "name":  "tournament-master-local-server",
+    "private":  true,
+    "version":  "1.0.9",
+    "description":  "Tournament Master local server for QR Live Tracking and tournament data",
+    "main":  "dist/server.cjs",
+    "scripts":  {
+                    "start":  "node dist/server.cjs",
+                    "start:pm2":  "pm2 start ecosystem.config.cjs --update-env \u0026\u0026 pm2 save"
+                },
+    "engines":  {
+                    "node":  "\u003e=18"
+                },
+    "dependencies":  {
+                         "dotenv":  "^17.2.3",
+                         "express":  "^4.21.2",
+                         "pg":  "^8.22.0",
+                         "pm2":  "^6.0.14",
+                         "semver":  "^7.7.2",
+                         "ws":  "^8.21.0"
+                     }
 }
+

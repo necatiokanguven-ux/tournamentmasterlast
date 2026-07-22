@@ -9,10 +9,9 @@ import { useDealerControl } from "../dealerRotation/useDealerControl";
 import { formatTableDealDuration, formatDealerTableTiming, getCurrentTableDealSeconds, getDealRemainingSeconds } from "../dealerRotation/dealerTimeUtils";
 import { useLiveSecond } from "../dealerRotation/useLiveSecond";
 import { dealerDisplayName } from "../server/dealerRotation/types";
-import { Plus, Trash2, Skull, ShieldAlert, Users, Grid, RefreshCw, X, UserCheck, Undo2, QrCode, PhoneCall, Timer, UserCog } from "lucide-react";
+import { Plus, Trash2, Skull, ShieldAlert, Users, Grid, RefreshCw, X, UserCheck, Undo2, QrCode, Timer, UserCog } from "lucide-react";
 import { Table } from "../types";
 import TableQrModal from "./TableQrModal";
-import FloorSetupModal from "./FloorSetupModal";
 import DealerTimerSettingsModal from "./DealerTimerSettingsModal";
 import TableUndoModal from "./TableUndoModal";
 import { CountryLabel } from "./CountryLabel";
@@ -33,7 +32,6 @@ export default function TablesView() {
     getTableUndoCount,
     getTableUndoEntries,
     getWaitingListPlayers,
-    saveFloorTeams,
     saveDealerTimers,
   } = useTournament();
 
@@ -86,7 +84,6 @@ export default function TablesView() {
 
   const [selectedTableId, setSelectedTableId] = useState<string | null>(tables[0]?.id || null);
   const [qrTableNumber, setQrTableNumber] = useState<number | null>(null);
-  const [floorSetupOpen, setFloorSetupOpen] = useState(false);
   const [timerSettingsOpen, setTimerSettingsOpen] = useState(false);
   const [undoModalOpen, setUndoModalOpen] = useState(false);
 
@@ -426,13 +423,6 @@ export default function TablesView() {
           <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
-              onClick={() => setFloorSetupOpen(true)}
-              className="px-2.5 py-1 bg-zinc-900 border border-orange-500/30 hover:bg-orange-500/10 rounded-lg text-[10px] font-bold uppercase tracking-wider transition flex items-center gap-1 text-orange-300"
-            >
-              <PhoneCall className="w-3.5 h-3.5" /> Floor Setup
-            </button>
-            <button
-              type="button"
               onClick={() => setTimerSettingsOpen(true)}
               className="px-2.5 py-1 bg-zinc-900 border border-cyan-500/30 hover:bg-cyan-500/10 rounded-lg text-[10px] font-bold uppercase tracking-wider transition flex items-center gap-1 text-cyan-300"
             >
@@ -598,15 +588,6 @@ export default function TablesView() {
 
       {qrTableNumber !== null ? (
         <TableQrModal tableNumber={qrTableNumber} onClose={() => setQrTableNumber(null)} />
-      ) : null}
-
-      {floorSetupOpen ? (
-        <FloorSetupModal
-          tables={tables}
-          initialTeams={settings.floorTeams ?? []}
-          onSave={saveFloorTeams}
-          onClose={() => setFloorSetupOpen(false)}
-        />
       ) : null}
 
       {timerSettingsOpen ? (

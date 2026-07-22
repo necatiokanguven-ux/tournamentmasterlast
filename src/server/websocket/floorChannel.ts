@@ -2,6 +2,7 @@ import type { FloorCall } from "../../types";
 import type { TournamentDatabase } from "../tournamentDatabase";
 import { getActiveFloorCallsForTeam } from "../tournamentOperations";
 import { buildSeatSnapshot } from "../tableSnapshot";
+import { resolveFloorStaffDisplayName } from "../../floor/floorStaffUtils";
 
 export type FloorTableSnapshot = {
   tableNumber: number;
@@ -21,6 +22,7 @@ export type FloorChannelPayload = {
   version: number;
   teamId: string;
   teamName: string;
+  staffDisplayName: string;
   tableNumbers: number[];
   calls: FloorCall[];
   tables: FloorTableSnapshot[];
@@ -61,6 +63,7 @@ export function buildFloorChannelPayload(db: TournamentDatabase, teamId: string)
     version: db.meta.lastModified,
     teamId: team.id,
     teamName: team.name,
+    staffDisplayName: resolveFloorStaffDisplayName(db, team.id) ?? "",
     tableNumbers: team.tableNumbers,
     calls: getActiveFloorCallsForTeam(db, teamId),
     tables,

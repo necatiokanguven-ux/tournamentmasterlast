@@ -14,6 +14,22 @@ if (-not $StagingDir) {
 $ReleaseDir = Join-Path $Root "release\installer"
 New-Item -ItemType Directory -Path $ReleaseDir -Force | Out-Null
 
+$versionFile = Join-Path $Root "version.json"
+if (-not (Test-Path -LiteralPath $versionFile)) {
+  throw "version.json not found at repo root."
+}
+$versionInfo = Get-Content -LiteralPath $versionFile -Raw | ConvertFrom-Json
+$AppVersion = [string]$versionInfo.version
+if (-not $AppVersion) {
+  throw "version.json is missing version."
+}
+Write-Host "Building Tournament Master v$AppVersion"
+
+$localPkgPath = Join-Path $Root "packaging\local-server-package.json"
+$localPkg = Get-Content -LiteralPath $localPkgPath -Raw | ConvertFrom-Json
+$localPkg.version = $AppVersion
+($localPkg | ConvertTo-Json -Depth 8) + [Environment]::NewLine | Set-Content -LiteralPath $localPkgPath -Encoding UTF8
+
 Write-Host "Staging embedded Node.js for Windows..."
 & (Join-Path $Root "packaging\scripts\stage-runtime.ps1") -DownloadNode -SkipIfPresent -Platform win
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -39,6 +55,7 @@ $activeStagingDir = $buildStagingDir
 
 $copyItems = @(
   @{ Source = "dist"; Dest = "dist"; Recurse = $true },
+  @{ Source = "ecosystem.config.cjs"; Dest = "ecosystem.config.cjs"; Recurse = $false },
   @{ Source = "migrations"; Dest = "migrations"; Recurse = $true },
   @{ Source = "packaging\start.bat"; Dest = "start.bat"; Recurse = $false },
   @{ Source = "packaging\stop.bat"; Dest = "stop.bat"; Recurse = $false },
@@ -48,7 +65,8 @@ $copyItems = @(
   @{ Source = "packaging\local-server-package.json"; Dest = "package.json"; Recurse = $false },
   @{ Source = "packaging\README-win.txt"; Dest = "README-win.txt"; Recurse = $false },
   @{ Source = "packaging\scripts"; Dest = "scripts"; Recurse = $true },
-  @{ Source = "packaging\launcher"; Dest = "launcher"; Recurse = $true }
+  @{ Source = "packaging\launcher"; Dest = "launcher"; Recurse = $true },
+  @{ Source = "version.json"; Dest = "version.json"; Recurse = $false }
 )
 
 foreach ($item in $copyItems) {
@@ -133,6 +151,16 @@ function Publish-StagingDirectory {
 
 $StagingDir = Publish-StagingDirectory -TargetDir $StagingDir -SourceDir $activeStagingDir
 
+$winZip = Join-Path $ReleaseDir "TourMasterWin.zip"
+$portableZip = Join-Path $ReleaseDir "TourMasterSetup-portable.zip"
+Write-Host ""
+Write-Host "Creating portable Windows zip..."
+if (Test-Path $winZip) { Remove-Item $winZip -Force }
+if (Test-Path $portableZip) { Remove-Item $portableZip -Force }
+Compress-Archive -Path (Join-Path $StagingDir "*") -DestinationPath $winZip -CompressionLevel Optimal
+Copy-Item $winZip $portableZip -Force
+Write-Host "Done: release\installer\TourMasterWin.zip"
+
 Write-Host ""
 Write-Host "Staging ready: $StagingDir"
 
@@ -168,9 +196,19 @@ if (-not $iscc -and $TryInstallInno) {
 if ($iscc -and (Test-Path $iscc)) {
   Write-Host ""
   Write-Host "Compiling TourMasterSetup.exe..."
-  & $iscc (Join-Path $Root "packaging\installer\TournamentMaster.iss")
+  & $iscc "/DAppVersion=$AppVersion" (Join-Path $Root "packaging\installer\TournamentMaster.iss")
   if ($LASTEXITCODE -eq 0) {
-    Write-Host "Done: release\installer\TourMasterSetup.exe"
+    $setupExe = Join-Path $ReleaseDir "TourMasterSetup.exe"
+    $versionedExe = Join-Path $ReleaseDir "TourMasterSetup_$AppVersion.exe"
+    if (Test-Path -LiteralPath $setupExe) {
+      Copy-Item -LiteralPath $setupExe -Destination $versionedExe -Force
+      Write-Host "Done: release\installer\TourMasterSetup.exe"
+      Write-Host "Done: release\installer\TourMasterSetup_$AppVersion.exe"
+      & (Join-Path $Root "packaging\scripts\generate-update-manifest.ps1") -Root $Root -InstallerPath $versionedExe | Out-Null
+      Write-Host "Done: release\installer\update.json"
+    } else {
+      Write-Host "Done: release\installer\TourMasterSetup.exe"
+    }
   } else {
     Write-Host "ISCC failed with exit code $LASTEXITCODE"
     exit $LASTEXITCODE

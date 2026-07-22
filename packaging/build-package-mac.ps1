@@ -48,11 +48,13 @@ New-Item -ItemType Directory -Path $buildStagingDir -Force | Out-Null
 
 $copyItems = @(
   @{ Source = "dist"; Dest = "dist"; Recurse = $true },
+  @{ Source = "ecosystem.config.cjs"; Dest = "ecosystem.config.cjs"; Recurse = $false },
   @{ Source = "migrations"; Dest = "migrations"; Recurse = $true },
   @{ Source = "packaging\start.command"; Dest = "start.command"; Recurse = $false },
   @{ Source = "packaging\local-server-package.json"; Dest = "package.json"; Recurse = $false },
   @{ Source = "packaging\README-mac.txt"; Dest = "README-mac.txt"; Recurse = $false },
-  @{ Source = "packaging\scripts\resolve-node-mac.sh"; Dest = "scripts\resolve-node-mac.sh"; Recurse = $false }
+  @{ Source = "packaging\scripts\resolve-node-mac.sh"; Dest = "scripts\resolve-node-mac.sh"; Recurse = $false },
+  @{ Source = "version.json"; Dest = "version.json"; Recurse = $false }
 )
 
 foreach ($item in $copyItems) {
@@ -171,6 +173,10 @@ $dmgScript = Join-Path $Root "packaging\mac\build-dmg-vps.ps1"
 if ($LASTEXITCODE -ne 0) {
   throw "DMG build failed."
 }
+
+$releaseRootDmg = Join-Path $Root "release\TourMasterMac.dmg"
+Copy-Item $OutputDmg $releaseRootDmg -Force
+Write-Host "Copied DMG to: $releaseRootDmg"
 
 Write-Host ""
 Write-Host "Done. End-user macOS installer:"

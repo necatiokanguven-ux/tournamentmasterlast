@@ -81,3 +81,15 @@ export function localWsApi(path: string): string {
 }
 
 export const LOCAL_SERVER_PORT = 3000;
+export const LOCAL_WATCHDOG_PORT = 3099;
+
+export function isDirectorOnServerMachine(): boolean {
+  if (typeof window === "undefined") return false;
+  const hostname = window.location.hostname;
+  return hostname === "localhost" || hostname === "127.0.0.1";
+}
+
+export function localWatchdogApi(path: string): string {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `http://127.0.0.1:${LOCAL_WATCHDOG_PORT}${normalizedPath}`;
+}

@@ -133,13 +133,53 @@ if not exist "dist\server.cjs" (
   exit /b 1
 )
 
+if not exist "dist\watchdog.cjs" (
+  echo ERROR: dist\watchdog.cjs is missing. Re-download TourMasterSetup from pokerclup.com
+  pause
+  exit /b 1
+)
+
 set NODE_ENV=production
 set TM_AUTO_OPEN_BROWSER=1
 set TM_HTTP_PORT=!TM_HTTP_PORT!
+set TM_INSTALL_DIR=%INSTALL_DIR%
+
+set "PM2_BIN=%INSTALL_DIR%node_modules\pm2\bin\pm2"
+set "USE_PM2=0"
+if exist "%PM2_BIN%" set "USE_PM2=1"
 
 echo.
+if "!USE_PM2!"=="1" (
+  echo Tournament Master is starting under PM2 on port !TM_HTTP_PORT!...
+  echo PM2 auto-restarts the server and watchdog if they crash.
+  echo.
+  "%NODE_EXE%" "%PM2_BIN%" delete tournament-master 2>nul
+  "%NODE_EXE%" "%PM2_BIN%" delete tournament-master-watchdog 2>nul
+  "%NODE_EXE%" "%PM2_BIN%" start ecosystem.config.cjs --update-env
+  if errorlevel 1 (
+    echo PM2 start failed - falling back to direct Node.js...
+    set "USE_PM2=0"
+  ) else (
+    "%NODE_EXE%" "%PM2_BIN%" save
+    echo When ready, your browser will open http://localhost:!TM_HTTP_PORT!/ automatically.
+    echo Keep this window open during the tournament, or use the tray launcher.
+    echo Data folder: !TM_DATA_DIR!
+    echo.
+    timeout /t 3 /nobreak >nul
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\open-director-browser.ps1" -Url "http://localhost:!TM_HTTP_PORT!/"
+    start /B powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\verify-post-update.ps1" -InstallDir "%INSTALL_DIR%" -HttpPort !TM_HTTP_PORT!
+    echo.
+    echo PM2 process list:
+    "%NODE_EXE%" "%PM2_BIN%" list
+    echo.
+    echo Logs: "%NODE_EXE%" "%PM2_BIN%" logs tournament-master
+    pause
+    exit /b 0
+  )
+)
+
 echo Tournament Master is starting on port !TM_HTTP_PORT!...
-echo When ready, your browser will open http://localhost:!TM_HTTP_PORT! automatically.
+echo When ready, your browser will open http://localhost:!TM_HTTP_PORT!/ automatically.
 echo Keep this window open during the tournament.
 echo Data folder: !TM_DATA_DIR!
 echo.

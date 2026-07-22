@@ -11,7 +11,6 @@ import { useRuntimeTuningPollMs } from "../systemHealth/useRuntimeTuning";
 
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 const WS_FALLBACK_POLL_MS = 15_000;
-const DEVICE_NAME_KEY = "tm-floor-device-name";
 const ALERTS_ENABLED_KEY = "tm-floor-alerts-enabled";
 
 type FloorTableSnapshot = {
@@ -64,6 +63,35 @@ function getTeamIdFromQuery(): string | null {
   return params.get("team");
 }
 
+async function resolveStaffNameFromRoster(teamId: string): Promise<string | null> {
+  try {
+    const response = await fetch(localApi("/api/dealer-control/state"));
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    const floorStaff = (data.rotation?.staff ?? []).filter(
+      (staff: { active?: boolean; role?: string }) => staff.active && staff.role === "floor",
+    );
+
+    const match = teamId.match(/^floor-(\d+)$/i);
+    if (match) {
+      const index = parseInt(match[1], 10) - 1;
+      const staff = floorStaff[index];
+      if (staff) {
+        return `${staff.firstName} ${staff.lastName}`.trim();
+      }
+    }
+
+    if (floorStaff.length === 1) {
+      return `${floorStaff[0].firstName} ${floorStaff[0].lastName}`.trim();
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export default function FloorView() {
   const { t } = useMobileI18n();
 
@@ -75,11 +103,10 @@ export default function FloorView() {
   const wsEnabled = isWsEnabled();
   const tuningPollMs = useRuntimeTuningPollMs("floorPollMs", DEFAULT_POLL_INTERVAL_MS);
   const floorChannel = teamId ? `floor:${teamId}` : null;
-  const [teamName, setTeamName] = useState("Floor");
+  const [staffDisplayName, setStaffDisplayName] = useState("");
   const [calls, setCalls] = useState<FloorCall[]>([]);
   const [tables, setTables] = useState<FloorTableSnapshot[]>([]);
   const [expandedTable, setExpandedTable] = useState<number | null>(null);
-  const [deviceName, setDeviceName] = useState(() => localStorage.getItem(DEVICE_NAME_KEY) ?? "");
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [alertsEnabled, setAlertsEnabled] = useState(
@@ -210,11 +237,15 @@ export default function FloorView() {
   }, [alertsEnabled]);
 
   const applyFloorPayload = useCallback((payload: {
+    staffDisplayName?: string;
     teamName?: string;
     calls?: FloorCall[];
     tables?: FloorTableSnapshot[];
   }) => {
-    if (payload.teamName) setTeamName(payload.teamName);
+    const name = payload.staffDisplayName?.trim();
+    if (name) {
+      setStaffDisplayName(name);
+    }
     if (payload.calls) setCalls(payload.calls);
     if (payload.tables) setTables(payload.tables);
     setError(null);
@@ -224,6 +255,7 @@ export default function FloorView() {
   const handleWsMessage = useCallback((message: TournamentSocketServerMessage) => {
     if (!floorChannel || !isChannelPayloadMessage(message) || message.channel !== floorChannel) return;
     applyFloorPayload(message.payload as {
+      staffDisplayName?: string;
       teamName?: string;
       calls?: FloorCall[];
       tables?: FloorTableSnapshot[];
@@ -251,7 +283,13 @@ export default function FloorView() {
       const callsData = await callsResponse.json();
       const tablesData = await tablesResponse.json();
 
-      setTeamName(callsData.teamName ?? teamId);
+      const name = callsData.staffDisplayName?.trim();
+      if (name) {
+        setStaffDisplayName(name);
+      } else {
+        const fallback = await resolveStaffNameFromRoster(teamId);
+        if (fallback) setStaffDisplayName(fallback);
+      }
       setCalls(callsData.calls ?? []);
       setTables(tablesData.tables ?? []);
       setError(null);
@@ -388,7 +426,7 @@ export default function FloorView() {
       await unlockAlerts();
     }
 
-    const acknowledgedBy = deviceName.trim() || "Floor";
+    const acknowledgedBy = staffDisplayName.trim() || teamId || "Floor";
     const response = await fetch(localApi(`/api/floor/calls/${callId}/ack`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -401,7 +439,6 @@ export default function FloorView() {
       return;
     }
 
-    localStorage.setItem(DEVICE_NAME_KEY, acknowledgedBy);
     await fetchData();
   };
 
@@ -458,7 +495,7 @@ export default function FloorView() {
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-[10px] font-black uppercase tracking-[0.25em] text-orange-400">{t.floorMobile}</p>
-              <h1 className="mt-2 text-2xl font-black uppercase">{teamName}</h1>
+              <h1 className="mt-2 text-2xl font-black uppercase">{staffDisplayName}</h1>
             </div>
             <ConnectionStatus
               connected={isConnected}
@@ -466,15 +503,6 @@ export default function FloorView() {
               disconnectLabel={t.disconnect}
             />
           </div>
-          <label className="block mt-4">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">{t.yourName}</span>
-            <input
-              value={deviceName}
-              onChange={(event) => setDeviceName(event.target.value)}
-              className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm"
-              placeholder="Alex"
-            />
-          </label>
           {alertsEnabled ? (
             <p className="mt-4 text-xs text-green-400">{t.alertsEnabled}</p>
           ) : (

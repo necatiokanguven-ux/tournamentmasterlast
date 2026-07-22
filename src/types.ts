@@ -66,6 +66,8 @@ export type TournamentCurrency =
 export interface FloorTeam {
   id: string;
   name: string;
+  /** Linked floor staff from Personel Control roster */
+  staffId?: string;
   tableNumbers: number[];
 }
 

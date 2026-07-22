@@ -998,6 +998,13 @@ export default function ClockView({
           
           {/* PLAYERS PANEL */}
           <div className="bg-zinc-900/40 rounded-2xl border border-zinc-800 p-5 shadow-lg flex flex-col justify-between flex-1 relative overflow-hidden group hover:border-zinc-700 transition">
+            <img
+              src="/image/obje1.png"
+              alt=""
+              aria-hidden="true"
+              className="absolute top-2 right-2 z-0 h-12 w-12 sm:h-14 sm:w-14 object-contain object-right-top pointer-events-none select-none opacity-75"
+            />
+            <div className="relative z-10 flex flex-col justify-between flex-1 min-h-0">
             <div className="flex items-center gap-2 text-zinc-400 text-xs font-bold uppercase tracking-wider mb-2">
               <span className="w-1.5 h-1.5 bg-amber-500 rounded-full"></span>
               PLAYERS
@@ -1016,11 +1023,19 @@ export default function ClockView({
                 <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest mt-1">ACTIVE TABLES</p>
               </div>
             </div>
-            <div className="absolute top-0 right-0 w-20 h-20 bg-amber-500/5 rounded-full blur-2xl"></div>
+            </div>
+            <div className="absolute top-0 right-0 w-20 h-20 bg-amber-500/5 rounded-full blur-2xl pointer-events-none z-0"></div>
           </div>
 
           {/* AVERAGE STACK PANEL */}
           <div className="bg-zinc-900/40 rounded-2xl border border-zinc-800 p-5 shadow-lg flex flex-col justify-between flex-1 relative overflow-hidden group hover:border-zinc-700 transition">
+            <img
+              src="/image/obje5.png"
+              alt=""
+              aria-hidden="true"
+              className="absolute top-2 right-2 z-0 h-12 w-12 sm:h-14 sm:w-14 object-contain object-right-top pointer-events-none select-none opacity-75"
+            />
+            <div className="relative z-10 flex flex-col justify-between flex-1 min-h-0">
             <div className="flex items-center gap-2 text-zinc-400 text-xs font-bold uppercase tracking-wider mb-2">
               <span className="w-1.5 h-1.5 bg-amber-500 rounded-full"></span>
               AVERAGE STACK
@@ -1036,10 +1051,18 @@ export default function ClockView({
                 <p className="text-2xl font-black text-emerald-400 font-sans tracking-tight">{totalChipsInPlay.toLocaleString("de-DE")}</p>
               </div>
             </div>
+            </div>
           </div>
 
           {/* PRIZE POOL PANEL */}
           <div className="bg-zinc-900/40 rounded-2xl border border-zinc-800 p-5 shadow-lg flex flex-col justify-between flex-1 relative overflow-hidden group hover:border-zinc-700 transition">
+            <img
+              src="/image/obje8.png"
+              alt=""
+              aria-hidden="true"
+              className="absolute top-2 right-2 z-0 h-12 w-12 sm:h-14 sm:w-14 object-contain object-right-top pointer-events-none select-none opacity-75"
+            />
+            <div className="relative z-10 flex flex-col justify-between flex-1 min-h-0">
             <div className="flex items-center gap-2 text-zinc-400 text-xs font-bold uppercase tracking-wider mb-2">
               <span className="w-1.5 h-1.5 bg-amber-500 rounded-full"></span>
               PRIZE POOL
@@ -1071,7 +1094,8 @@ export default function ClockView({
                 </div>
               </div>
             </div>
-            <div className="absolute bottom-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-3xl"></div>
+            </div>
+            <div className="absolute bottom-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none z-0"></div>
           </div>
 
         </div>
